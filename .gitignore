@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Results (太大，不上传)
+results/
+*.bmp
+
+# Editor
+.vscode/
+*.swp
