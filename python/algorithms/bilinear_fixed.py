@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# 最近邻插值算法 - 定点实现
-# Nearest Neighbor Interpolation - Fixed Point Implementation
+# 双线性插值算法 - 定点实现
+# Bilinear Interpolation - Fixed Point Implementation
 #
 # 用途：
 #     - RTL 实现的定点化参考模型
@@ -9,13 +9,10 @@
 #
 # 坐标映射（定点化）：
 #     src_pos_fixed = ((dst_idx + 0.5) / scale - 0.5) * 2^n
-#                   = ((dst_idx + 0.5) * inv_scale - 0.5) * 2^n
 #
-#     其中 inv_scale = 1/scale = src_size / dst_size
-#
-# 取整方式：
-#     floor(src_pos + 0.5)
-#     定点实现: (src_pos_fixed + (1 << (n-1))) >> n
+# 插值公式（定点化）：
+#     权重使用 Q0.w 格式（纯小数，w 位小数位）
+#     result = (P00*w00 + P10*w10 + P01*w01 + P11*w11) >> w
 #
 # 作者：
 # 版本：1.0
@@ -26,45 +23,46 @@ import os
 from datetime import datetime
 
 
-class NearestNeighborFixed:
-	# 最近邻插值缩放器（定点实现）
+class BilinearFixed:
+	# 双线性插值缩放器（定点实现）
 	#
 	# 定点格式 Qm.n：
 	# - m: 整数位宽（包含符号位）
 	# - n: 小数位宽
-	# - 总值范围: [-2^(m-1), 2^(m-1) - 2^(-n)]
-	# - 精度: 1/2^n
 	#
-	# 常用配置：
-	# - Q8.8:  范围 [-128, 127.996], 精度 0.0039
-	# - Q4.12: 范围 [-8, 7.9998], 精度 0.00024
-	# - Q12.4: 范围 [-2048, 2047.9375], 精度 0.0625
+	# 权重格式 Q0.w：
+	# - 纯小数，范围 [0, 1 - 2^(-w)]
+	# - 通常 w=8 或 w=12
 
-	def __init__(self, int_bits=8, frac_bits=8, scale_factor=None, target_size=None):
+	def __init__(self, int_bits=8, frac_bits=8, weight_bits=8, scale_factor=None, target_size=None):
 		# 初始化定点缩放器
 		#
 		# Args:
 		#     int_bits: 整数位宽 m（包含符号位）
-		#     frac_bits: 小数位宽 n
+		#     frac_bits: 坐标小数位宽 n
+		#     weight_bits: 权重小数位宽 w（Q0.w）
 		#     scale_factor: 缩放比例（可选）
 		#     target_size: 目标尺寸 (width, height)（可选）
 		#
 		# Raises:
 		#     ValueError: 位宽配置不合理或参数冲突
 
-		if int_bits < 1 or frac_bits < 0:
-			raise ValueError(f"位宽配置错误: int_bits={int_bits}, frac_bits={frac_bits}")
+		if int_bits < 1 or frac_bits < 0 or weight_bits < 1:
+			raise ValueError(f"位宽配置错误: int_bits={int_bits}, frac_bits={frac_bits}, weight_bits={weight_bits}")
 
 		if int_bits + frac_bits > 32:
 			print(f"警告: 总位宽 {int_bits + frac_bits} 位，建议使用 32 位以内")
 
-		self.m     = int_bits
-		self.n     = frac_bits
-		self.scale = 1 << frac_bits  # 2^n
+		self.m = int_bits
+		self.n = frac_bits
+		self.w = weight_bits
+
+		self.scale_coord = 1 << frac_bits   # 2^n，坐标缩放因子
+		self.scale_weight = 1 << weight_bits  # 2^w，权重缩放因子
 
 		# 计算定点数范围
-		self.max_val = (1 << (int_bits + frac_bits - 1)) - 1  # 正最大值
-		self.min_val = -(1 << (int_bits + frac_bits - 1))     # 负最小值
+		self.max_val = (1 << (int_bits + frac_bits - 1)) - 1
+		self.min_val = -(1 << (int_bits + frac_bits - 1))
 
 		if (scale_factor is None and target_size is None) or (scale_factor is not None and target_size is not None):
 			raise ValueError("请指定 scale_factor 或 target_size 其中一个")
@@ -72,107 +70,130 @@ class NearestNeighborFixed:
 		self.scale_factor = scale_factor
 		self.target_size  = target_size
 
-		print(f"定点格式: Q{int_bits}.{frac_bits}")
-		print(f"  整数位: {int_bits}, 小数位: {frac_bits}")
-		print(f"  缩放因子: 2^{frac_bits} = {self.scale}")
+		print(f"定点格式: Q{int_bits}.{frac_bits}, 权重 Q0.{weight_bits}")
+		print(f"  坐标缩放因子: 2^{frac_bits} = {self.scale_coord}")
+		print(f"  权重缩放因子: 2^{weight_bits} = {self.scale_weight}")
 		print(f"  值域: [{self.min_val}, {self.max_val}]")
 
 	def _float_to_fixed(self, x):
-		# 浮点数转定点数
-		#
-		# Args:
-		#     x: 浮点数或 numpy 数组
-		#
-		# Returns:
-		#     定点数表示（整型）
-
-		fixed = np.round(x * self.scale).astype(np.int64)
-
-		# 饱和处理（防止溢出）
+		# 浮点数转定点数（用于坐标）
+		fixed = np.round(x * self.scale_coord).astype(np.int64)
 		fixed = np.clip(fixed, self.min_val, self.max_val)
-
 		return fixed
+
+	def _float_to_weight(self, x):
+		# 浮点数转权重定点数（Q0.w，范围 0~1）
+		weight = np.round(x * self.scale_weight).astype(np.int64)
+		weight = np.clip(weight, 0, self.scale_weight - 1)
+		return weight
 
 	def _fixed_to_float(self, fixed):
 		# 定点数转浮点数（用于调试）
-		return fixed / self.scale
-
-	def _compute_scale_fixed(self, src_w, src_h):
-		# 计算定点化的缩放比例
-		if self.target_size is not None:
-			tgt_w, tgt_h = self.target_size
-			# 定点数计算：scale_x = tgt_w / src_w
-			scale_x = self._float_to_fixed(tgt_w / src_w)
-			scale_y = self._float_to_fixed(tgt_h / src_h)
-			dst_w   = int(tgt_w)
-			dst_h   = int(tgt_h)
-		else:
-			scale_x = scale_y = self._float_to_fixed(self.scale_factor)
-			dst_w   = int(src_w * self.scale_factor)
-			dst_h   = int(src_h * self.scale_factor)
-
-		return scale_x, scale_y, dst_w, dst_h
+		return fixed / self.scale_coord
 
 	def _compute_inv_scale_fixed(self, src_size, dst_size):
 		# 计算定点化的逆缩放比例
-		#
-		# inv_scale = src_size / dst_size (浮点)
-		# inv_scale_fixed = round(inv_scale * 2^n)
-
 		inv_scale_float = src_size / dst_size
 		inv_scale_fixed = self._float_to_fixed(inv_scale_float)
 		return inv_scale_fixed
 
-	def _nearest_round_fixed(self, pos_fixed):
-		# 定点数最近邻取整
-		#
-		# 浮点: floor(pos + 0.5)
-		# 定点: (pos_fixed + 2^(n-1)) >> n
-		#
-		# 注意：这里直接右移相当于向下取整
-
-		# 加上 0.5 的定点表示 (2^(n-1))
-		half = 1 << (self.n - 1) if self.n > 0 else 0
-		return (pos_fixed + half) >> self.n
-
 	def _compute_src_coord_fixed(self, dst_idx, inv_scale_fixed, src_size):
 		# 计算目标像素对应的原图坐标（定点实现）
 		#
-		# 公式推导：
+		# 公式推导（与最近邻相同）：
 		# src_pos = (dst_idx + 0.5) * inv_scale - 0.5
-		#
-		# 定点化（保持精度）：
-		# src_pos_fixed = ((dst_idx + 0.5) * inv_scale - 0.5) * 2^n
-		#               = ((2*dst_idx + 1) * inv_scale - 1) * 2^(n-1)
-		#               = (((2*dst_idx + 1) * inv_scale_fixed) >> 1) - (1 << (n-1))
-		#
-		# Args:
-		#     dst_idx: 目标像素索引（整数）
-		#     inv_scale_fixed: 逆缩放比例的定点表示（inv_scale * 2^n）
-		#     src_size: 原图尺寸（用于边界检查）
+		# src_pos_fixed = (((2*dst_idx + 1) * inv_scale_fixed) >> 1) - (1 << (n-1))
 		#
 		# Returns:
-		#     src_idx: 原图像素索引（整数，已边界裁剪）
+		#     src_pos_fixed: 原图像素定点坐标
+		#     dy/dx: 小数部分（权重，Q0.w 格式）
 
-		# 定点数计算
 		half_n = 1 << (self.n - 1) if self.n > 0 else 0
 
-		# 计算 (2*dst_idx + 1) * inv_scale_fixed，使用 int64 防止溢出
+		# 计算定点坐标
 		mult = (np.int64(2 * dst_idx + 1) * inv_scale_fixed)
-
-		# 右移 1 位（除以 2），然后减去 0.5 的定点表示
 		src_pos_fixed = (mult >> 1) - half_n
 
-		# 饱和处理（防止定点数溢出）
+		# 饱和处理
 		src_pos_fixed = np.clip(src_pos_fixed, self.min_val, self.max_val)
 
-		# 最近邻取整（floor(src_pos + 0.5) 的定点实现）
-		src_idx = self._nearest_round_fixed(src_pos_fixed)
+		# 边界保护后的坐标
+		src_pos_clamped = max(0, min(src_pos_fixed, (src_size - 1) << self.n))
 
-		# 边界裁剪
-		src_idx = max(0, min(src_idx, src_size - 1))
+		# 分离整数部分和小数部分
+		# 整数部分（用于取像素）
+		y_int = src_pos_clamped >> self.n
+		# 小数部分（用于权重，需要转换到 Q0.w 格式）
+		frac_mask = (1 << self.n) - 1
+		y_frac = src_pos_clamped & frac_mask  # 0 ~ (2^n - 1)
 
-		return int(src_idx)
+		# 将小数部分从 Q0.n 转换到 Q0.w
+		if self.w == self.n:
+			d = y_frac
+		elif self.w > self.n:
+			d = y_frac << (self.w - self.n)
+		else:
+			d = y_frac >> (self.n - self.w)
+
+		return int(y_int), int(d)
+
+	def _bilinear_interpolate_fixed(self, src_img, y_int, dy_fixed, x_int, dx_fixed):
+		# 对单个像素进行双线性插值（定点实现）
+		#
+		# Args:
+		#     src_img: 源图像数组
+		#     y_int: 源图像Y整数坐标
+		#     dy_fixed: Y方向小数部分（Q0.w）
+		#     x_int: 源图像X整数坐标
+		#     dx_fixed: X方向小数部分（Q0.w）
+		#
+		# Returns:
+		#     插值后的像素值 (R, G, B)，uint8
+
+		src_h, src_w = src_img.shape[:2]
+
+		# 边界保护
+		y0 = max(0, min(y_int, src_h - 1))
+		x0 = max(0, min(x_int, src_w - 1))
+		y1 = min(y0 + 1, src_h - 1)
+		x1 = min(x0 + 1, src_w - 1)
+
+		# 获取周围4个像素
+		p00 = src_img[y0, x0].astype(np.int32)  # 左上
+		p10 = src_img[y0, x1].astype(np.int32)  # 右上
+		p01 = src_img[y1, x0].astype(np.int32)  # 左下
+		p11 = src_img[y1, x1].astype(np.int32)  # 右下
+
+		# 计算定点权重（Q0.w 格式）
+		# w00 = (1-dx) * (1-dy) -> ((scale_weight - dx) * (scale_weight - dy)) >> w
+		# w10 = dx * (1-dy)    -> (dx * (scale_weight - dy)) >> w
+		# w01 = (1-dx) * dy    -> ((scale_weight - dx) * dy) >> w
+		# w11 = dx * dy        -> (dx * dy) >> w
+
+		sw = self.scale_weight
+		dx = dx_fixed
+		dy = dy_fixed
+
+		# 预计算 (1-dx) 和 (1-dy) 的定点表示
+		one_minus_dx = sw - dx
+		one_minus_dy = sw - dy
+
+		# 计算权重（使用 int64 防止溢出）
+		w00 = (np.int64(one_minus_dx) * one_minus_dy) >> self.w
+		w10 = (np.int64(dx) * one_minus_dy) >> self.w
+		w01 = (np.int64(one_minus_dx) * dy) >> self.w
+		w11 = (np.int64(dx) * dy) >> self.w
+
+		# 定点插值计算
+		# result = (P00*w00 + P10*w10 + P01*w01 + P11*w11) >> w
+		# 像素是 uint8，权重是 Q0.w，乘积是 Q8.w，需要右移 w 位
+		result = (np.int64(p00) * w00 + np.int64(p10) * w10 +
+		          np.int64(p01) * w01 + np.int64(p11) * w11) >> self.w
+
+		# 饱和到 0-255
+		result = np.clip(result, 0, 255).astype(np.uint8)
+
+		return result
 
 	def process(self, input_image, debug=False):
 		# 处理图像（定点实现）
@@ -202,31 +223,16 @@ class NearestNeighborFixed:
 		# 计算目标尺寸
 		if self.target_size:
 			dst_w, dst_h = self.target_size
-			scale_x      = dst_w / src_w
-			scale_y      = dst_h / src_h
 		else:
-			dst_w   = int(src_w * self.scale_factor)
-			dst_h   = int(src_h * self.scale_factor)
-			scale_x = scale_y = self.scale_factor
+			dst_w = int(src_w * self.scale_factor)
+			dst_h = int(src_h * self.scale_factor)
 
-		# 计算定点化的逆缩放比例（用于坐标计算）
+		# 计算定点化的逆缩放比例
 		inv_scale_x_fixed = self._compute_inv_scale_fixed(src_w, dst_w)
 		inv_scale_y_fixed = self._compute_inv_scale_fixed(src_h, dst_h)
 
 		print(f"原图尺寸: {src_w}x{src_h}")
 		print(f"目标尺寸: {dst_w}x{dst_h}")
-		print(f"缩放比例: X={scale_x:.4f}, Y={scale_y:.4f}")
-		print(f"逆缩放定点: inv_scale_x={inv_scale_x_fixed}, inv_scale_y={inv_scale_y_fixed}")
-
-		# 调试：打印前几个像素的坐标映射
-		if debug:
-			print("\n调试信息（前5个像素的坐标映射）:")
-			for i in range(min(5, dst_w)):
-				src_idx = self._compute_src_coord_fixed(i, inv_scale_x_fixed, src_w)
-				# 计算浮点参考值
-				src_pos_float = (i + 0.5) / scale_x - 0.5
-				print(f"  dst_x={i}: src_pos_float={src_pos_float:.4f}, "
-					f"src_idx_fixed={src_idx}")
 
 		# 创建输出图像
 		dst_img = np.zeros((dst_h, dst_w, 3), dtype=np.uint8)
@@ -234,14 +240,15 @@ class NearestNeighborFixed:
 		# 逐像素处理（定点计算）
 		for dst_y in range(dst_h):
 			# 计算 Y 方向原图坐标
-			src_y = self._compute_src_coord_fixed(dst_y, inv_scale_y_fixed, src_h)
+			y_int, dy_fixed = self._compute_src_coord_fixed(dst_y, inv_scale_y_fixed, src_h)
 
 			for dst_x in range(dst_w):
 				# 计算 X 方向原图坐标
-				src_x = self._compute_src_coord_fixed(dst_x, inv_scale_x_fixed, src_w)
+				x_int, dx_fixed = self._compute_src_coord_fixed(dst_x, inv_scale_x_fixed, src_w)
 
-				# 像素复制
-				dst_img[dst_y, dst_x] = src_img[src_y, src_x]
+				# 双线性插值（定点）
+				dst_img[dst_y, dst_x] = self._bilinear_interpolate_fixed(
+					src_img, y_int, dy_fixed, x_int, dx_fixed)
 
 		return dst_img
 
@@ -272,7 +279,7 @@ class NearestNeighborFixed:
 			size_tag = f"scale{self.scale_factor:.2f}"
 
 		# 定点格式标记
-		fixed_tag = f"Q{self.m}_{self.n}"
+		fixed_tag = f"Q{self.m}_{self.n}_w{self.w}"
 
 		timestamp = datetime.now().strftime("%m%d_%H%M%S")
 
@@ -280,7 +287,7 @@ class NearestNeighborFixed:
 		os.makedirs(output_dir, exist_ok=True)
 
 		output_path = os.path.join(output_dir,
-			f"{base_name}_nearest_fixed_{fixed_tag}_{size_tag}_{timestamp}.png")
+			f"{base_name}_bilinear_fixed_{fixed_tag}_{size_tag}_{timestamp}.png")
 		Image.fromarray(output_array).save(output_path)
 		print(f"输出图像: {output_path}")
 
@@ -290,18 +297,18 @@ class NearestNeighborFixed:
 def compare_fixed_configs(input_path, target_size=None, scale_factor=None):
 	# 对比不同定点配置的差异
 	#
-	# 评估 Qm.n 位宽对最终画质的影响
+	# 评估 Qm.n 位宽和权重精度对最终画质的影响
 
 	# 读取图像
 	img       = Image.open(input_path).convert("RGB")
 	img_array = np.array(img)
 
-	# 不同定点配置
+	# 不同定点配置 (int_bits, frac_bits, weight_bits)
 	configs = [
-		(8, 8),   # Q8.8: 范围大，精度中等
-		(4, 12),  # Q4.12: 范围小，精度高
-		(12, 4),  # Q12.4: 范围大，精度低
-		(2, 14),  # Q2.14: 范围很小，精度很高
+		(8, 8, 8),    # Q8.8 + Q0.8 权重
+		(8, 8, 12),   # Q8.8 + Q0.12 权重
+		(4, 12, 8),   # Q4.12 + Q0.8 权重
+		(4, 12, 12),  # Q4.12 + Q0.12 权重
 	]
 
 	print("=" * 60)
@@ -310,23 +317,24 @@ def compare_fixed_configs(input_path, target_size=None, scale_factor=None):
 
 	results = {}
 
-	for int_bits, frac_bits in configs:
-		print(f"\n测试 Q{int_bits}.{frac_bits}:")
+	for int_bits, frac_bits, weight_bits in configs:
+		print(f"\n测试 Q{int_bits}.{frac_bits} + Q0.{weight_bits}:")
 		try:
-			scaler = NearestNeighborFixed(
+			scaler = BilinearFixed(
 				int_bits     = int_bits,
 				frac_bits    = frac_bits,
+				weight_bits  = weight_bits,
 				scale_factor = scale_factor,
 				target_size  = target_size
 			)
 			result = scaler.process(img)
-			results[f"Q{int_bits}.{frac_bits}"] = result
+			results[f"Q{int_bits}.{frac_bits}_w{weight_bits}"] = result
 		except Exception as e:
 			print(f"  错误: {e}")
 
 	# 如果有浮点参考，进行对比
-	from nearest_float import NearestNeighborFloat
-	float_scaler = NearestNeighborFloat(
+	from bilinear_float import BilinearFloat
+	float_scaler = BilinearFloat(
 		scale_factor = scale_factor,
 		target_size  = target_size
 	)
@@ -344,7 +352,7 @@ def compare_fixed_configs(input_path, target_size=None, scale_factor=None):
 			max_diff       = np.max(diff)
 			mean_diff      = np.mean(diff)
 			mismatch_count = np.sum(diff > 0)
-			print(f"{name:10s}: 最大差异={max_diff:3d}, 平均差异={mean_diff:.4f}, "
+			print(f"{name:20s}: 最大差异={max_diff:3d}, 平均差异={mean_diff:.4f}, "
 				f"不一致像素={mismatch_count}")
 
 	return results
@@ -356,8 +364,9 @@ if __name__ == "__main__":
 	# 配置参数
 
 	# 定点格式配置
-	INT_BITS  = 12   # 整数位
-	FRAC_BITS = 8   # 小数位
+	INT_BITS    = 12   # 整数位
+	FRAC_BITS   = 8   # 坐标小数位
+	WEIGHT_BITS = 8   # 权重小数位（Q0.8）
 
 	# 缩放参数（二选一）
 	SCALE_FACTOR = 2.0   # 放大2倍
@@ -367,20 +376,20 @@ if __name__ == "__main__":
 	# INPUT_IMAGE = "test_images/test_pattern.png"
 	INPUT_IMAGE = "test_images/绿球右上.png"
 
-
 	print("=" * 50)
-	print("最近邻插值 - 定点实现")
+	print("双线性插值 - 定点实现")
 	print("=" * 50)
 
 	# 创建测试图（如果不存在）
 	if not os.path.exists(INPUT_IMAGE):
-		print(f"测试图片不存在，请先运行 nearest_float.py 创建测试图")
+		print(f"测试图片不存在，请先运行 bilinear_float.py 创建测试图")
 		exit(1)
 
 	# 单配置测试
-	scaler = NearestNeighborFixed(
+	scaler = BilinearFixed(
 		int_bits     = INT_BITS,
 		frac_bits    = FRAC_BITS,
+		weight_bits  = WEIGHT_BITS,
 		scale_factor = SCALE_FACTOR,
 		target_size  = TARGET_SIZE
 	)
@@ -388,7 +397,7 @@ if __name__ == "__main__":
 	output_path = scaler.process_and_save(
 		INPUT_IMAGE,
 		output_dir = "results",
-		debug      = True  # 输出调试信息
+		debug      = False
 	)
 
 	# 多配置对比（可选）
