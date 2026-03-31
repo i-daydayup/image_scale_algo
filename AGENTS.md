@@ -216,6 +216,37 @@ assign ready = (state == IDLE);
 assign done  = (state == DONE);
 ```
 
+#### 信号声明四级对齐（模块端口声明）
+
+模块端口声明按**四级结构**对齐（信号类型 + 位宽 + 信号名 + 注释）：
+
+```verilog
+// 正确示例：四级对齐
+input  wire                          wr_en,      // 写使能
+input  wire [$clog2(LINE_WIDTH)-1:0] wr_addr,    // 写地址
+input  wire [DATA_WIDTH-1:0]         wr_data,    // 写数据
+
+// 正确示例：不同位宽对齐
+wire [15:0]                          dst_idx;    // I16
+wire [INT_BITS+FRAC_BITS-1:0]        inv_scale;  // I20
+wire [15:0]                          src_size;   // I16
+```
+
+**四级对齐规则：**
+
+| 级别 | 内容 | 对齐方式 |
+|------|------|----------|
+| 第1列 | 信号类型 | `input`/`output`/`wire`/`reg` 左对齐 |
+| 第2列 | 位宽 | `[DATA_WIDTH-1:0]` 等左对齐 |
+| 第3列 | 信号名 | 位宽后空一格，信号名左对齐 |
+| 第4列 | 注释 | `//` 对齐（调节信号名后的空格） |
+
+**计算方法：**
+1. 找出该组信号中最长的位宽声明
+2. 所有位宽在该位置左对齐
+3. 位宽后空一格写信号名
+4. 信号名后空格调节，使 `//` 对齐
+
 ### 3.2 命名规范
 ```verilog
 // 模块名：snake_case
@@ -371,16 +402,17 @@ module example (
 
     // 状态寄存器
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
+        if (rst_n == 1'b0) begin
             state <= IDLE;
-        end else begin
+        end
+        else begin
             state <= next_state;
         end
     end
 
     // 数据路径
     always @(posedge clk) begin
-        if (pixel_valid) begin
+        if (pixel_valid == 1'b1) begin
             pixel_reg[0] <= pixel_reg[1];
             pixel_reg[1] <= pixel_reg[2];
             pixel_reg[2] <= pixel_reg[3];
@@ -389,6 +421,56 @@ module example (
     end
 
 endmodule
+```
+
+#### always 块编码规范
+
+**1. 条件判断必须使用 `==` 方式，禁止使用 `!` 取反：**
+
+```verilog
+// 正确：使用 == 进行判断
+always @(posedge clk or negedge rst_n) begin
+    if (rst_n == 1'b0) begin
+        state <= IDLE;
+    end
+    else if (start == 1'b1) begin
+        state <= READ;
+    end
+    else begin
+        state <= next_state;
+    end
+end
+
+// 错误：使用 ! 取反
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin           // 禁止使用 !
+        state <= IDLE;
+    end else if (start) begin   // 禁止使用隐式判断
+        state <= READ;
+    end
+end
+```
+
+**2. else 必须换行，不得跟在 end 后面：**
+
+```verilog
+// 正确：else 换行
+if (rst_n == 1'b0) begin
+    state <= IDLE;
+end
+else if (start == 1'b1) begin
+    state <= READ;
+end
+else begin
+    state <= next_state;
+end
+
+// 错误：else 跟在 end 后面
+if (rst_n == 1'b0) begin
+    state <= IDLE;
+end else begin               // 禁止：else 应换行
+    state <= next_state;
+end
 ```
 
 ### 3.6 定点数运算规范
