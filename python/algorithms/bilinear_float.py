@@ -356,7 +356,10 @@ if __name__ == "__main__":
 	# INPUT_IMAGE = "test_images/test_pattern.png"
 	# INPUT_IMAGE = "test_images/侧脸纹理.png"
 	# INPUT_IMAGE = "test_images/文字球.png"
-	INPUT_IMAGE = "test_images/综合文字图形.png"
+	# INPUT_IMAGE = "test_images/综合文字图形.png"
+	# INPUT_IMAGE = "test_images/烤鸭美女眼耳发.png"
+	INPUT_IMAGE = "test_images/烤鸭美女眼.png"
+
 
 	# 如果测试图片不存在，创建一个标准测试图
 	if not os.path.exists(INPUT_IMAGE):
