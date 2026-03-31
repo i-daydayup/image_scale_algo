@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# 双线性插值算法 - 定点实现
-# Bilinear Interpolation - Fixed Point Implementation
+# 双三次插值算法 - 定点实现
+# Bicubic Interpolation - Fixed Point Implementation
 #
 # 用途：
 #     - RTL 实现的定点化参考模型
@@ -11,8 +11,9 @@
 #     src_pos_fixed = ((dst_idx + 0.5) / scale - 0.5) * 2^n
 #
 # 插值公式（定点化）：
-#     权重使用 Q0.w 格式（纯小数，w 位小数位）
-#     result = (P00*w00 + P10*w10 + P01*w01 + P11*w11) >> w
+#     使用预计算的双三次权重表（定点化 Q0.w）
+#     计算周围16个像素的加权平均
+#     result = (Σ(pixel * weight)) >> w
 #
 # 作者：
 # 版本：1.0
@@ -23,8 +24,8 @@ import os
 from datetime import datetime
 
 
-class BilinearFixed:
-	# 双线性插值缩放器（定点实现）
+class BicubicFixed:
+	# 双三次插值缩放器（定点实现）
 	#
 	# 定点格式 Qm.n：
 	# - m: 整数位宽（包含符号位）
@@ -33,8 +34,12 @@ class BilinearFixed:
 	# 权重格式 Q0.w：
 	# - 纯小数，范围 [0, 1 - 2^(-w)]
 	# - 通常 w=8 或 w=12
+	#
+	# Keys参数 a 定点化：
+	# - a = -0.5 为标准 Catmull-Rom
 
-	def __init__(self, int_bits=8, frac_bits=8, weight_bits=8, scale_factor=None, target_size=None):
+	def __init__(self, int_bits=8, frac_bits=8, weight_bits=8,
+	             scale_factor=None, target_size=None, a=-0.5):
 		# 初始化定点缩放器
 		#
 		# Args:
@@ -43,6 +48,7 @@ class BilinearFixed:
 		#     weight_bits: 权重小数位宽 w（Q0.w）
 		#     scale_factor: 缩放比例（可选）
 		#     target_size: 目标尺寸 (width, height)（可选）
+		#     a: Keys滤波器参数（浮点，用于生成定点权重表）
 		#
 		# Raises:
 		#     ValueError: 位宽配置不合理或参数冲突
@@ -56,8 +62,9 @@ class BilinearFixed:
 		self.m = int_bits
 		self.n = frac_bits
 		self.w = weight_bits
+		self.a = a  # Keys参数（浮点，用于生成权重表）
 
-		self.scale_coord = 1 << frac_bits   # 2^n，坐标缩放因子
+		self.scale_coord  = 1 << frac_bits    # 2^n，坐标缩放因子
 		self.scale_weight = 1 << weight_bits  # 2^w，权重缩放因子
 
 		# 计算定点数范围
@@ -70,10 +77,44 @@ class BilinearFixed:
 		self.scale_factor = scale_factor
 		self.target_size  = target_size
 
+		# 预计算定点化的双三次权重表
+		self._precompute_weights()
+
 		print(f"定点格式: Q{int_bits}.{frac_bits}, 权重 Q0.{weight_bits}")
 		print(f"  坐标缩放因子: 2^{frac_bits} = {self.scale_coord}")
 		print(f"  权重缩放因子: 2^{weight_bits} = {self.scale_weight}")
 		print(f"  值域: [{self.min_val}, {self.max_val}]")
+		print(f"  Keys参数 a={a}")
+
+	def _precompute_weights(self):
+		# 预计算定点化的双三次权重表
+		# 对于每个可能的 dx/dy（Q0.w 格式），预计算4个权重值
+
+		# 权重表大小: scale_weight x 4
+		# weights[dx_fixed][k] = w_k，其中 k=-1,0,1,2
+		self.weight_table = np.zeros((self.scale_weight, 4), dtype=np.int32)
+
+		for dx_fixed in range(self.scale_weight):
+			# 将定点 dx 转回浮点
+			dx = dx_fixed / self.scale_weight
+
+			for k, offset in enumerate([-1, 0, 1, 2]):
+				# 计算到中心点的距离
+				t = offset - dx
+				t_abs = abs(t)
+
+				# 双三次权重（浮点）
+				if t_abs <= 1:
+					w = (self.a + 2) * (t_abs ** 3) - (self.a + 3) * (t_abs ** 2) + 1
+				elif t_abs < 2:
+					w = self.a * (t_abs ** 3) - 5 * self.a * (t_abs ** 2) + 8 * self.a * t_abs - 4 * self.a
+				else:
+					w = 0.0
+
+				# 定点化并饱和
+				w_fixed = int(round(w * self.scale_weight))
+				w_fixed = max(0, min(w_fixed, self.scale_weight - 1))
+				self.weight_table[dx_fixed, k] = w_fixed
 
 	def _float_to_fixed(self, x):
 		# 浮点数转定点数（用于坐标）
@@ -100,7 +141,7 @@ class BilinearFixed:
 	def _compute_src_coord_fixed(self, dst_idx, inv_scale_fixed, src_size):
 		# 计算目标像素对应的原图坐标（定点实现）
 		#
-		# 公式推导（与最近邻相同）：
+		# 公式推导（与最近邻/双线性相同）：
 		# src_pos = (dst_idx + 0.5) * inv_scale - 0.5
 		# src_pos_fixed = (((2*dst_idx + 1) * inv_scale_fixed) >> 1) - (1 << (n-1))
 		#
@@ -137,8 +178,8 @@ class BilinearFixed:
 
 		return int(y_int), int(d)
 
-	def _bilinear_interpolate_fixed(self, src_img, y_int, dy_fixed, x_int, dx_fixed):
-		# 对单个像素进行双线性插值（定点实现）
+	def _bicubic_interpolate_fixed(self, src_img, y_int, dy_fixed, x_int, dx_fixed):
+		# 对单个像素进行双三次插值（定点实现）
 		#
 		# Args:
 		#     src_img: 源图像数组
@@ -152,43 +193,38 @@ class BilinearFixed:
 
 		src_h, src_w = src_img.shape[:2]
 
-		# 边界保护
-		y0 = max(0, min(y_int, src_h - 1))
-		x0 = max(0, min(x_int, src_w - 1))
-		y1 = min(y0 + 1, src_h - 1)
-		x1 = min(x0 + 1, src_w - 1)
+		# 从预计算表中获取Y方向和X方向的权重
+		wy = self.weight_table[dy_fixed]  # [4] 对应偏移 -1,0,1,2
+		wx = self.weight_table[dx_fixed]  # [4]
 
-		# 获取周围4个像素
-		p00 = src_img[y0, x0].astype(np.int32)  # 左上
-		p10 = src_img[y0, x1].astype(np.int32)  # 右上
-		p01 = src_img[y1, x0].astype(np.int32)  # 左下
-		p11 = src_img[y1, x1].astype(np.int32)  # 右下
+		# 计算16个权重（使用 int64 防止溢出）
+		weights = np.zeros((4, 4), dtype=np.int64)
+		for i in range(4):
+			for j in range(4):
+				weights[i, j] = (np.int64(wy[i]) * wx[j]) >> self.w
 
-		# 计算定点权重（Q0.w 格式）
-		# w00 = (1-dx) * (1-dy) -> ((scale_weight - dx) * (scale_weight - dy)) >> w
-		# w10 = dx * (1-dy)    -> (dx * (scale_weight - dy)) >> w
-		# w01 = (1-dx) * dy    -> ((scale_weight - dx) * dy) >> w
-		# w11 = dx * dy        -> (dx * dy) >> w
+		# 归一化权重（定点除法）
+		weight_sum = np.sum(weights)
+		if weight_sum > 0:
+			# 归一化: weight = weight * scale_weight / weight_sum
+			for i in range(4):
+				for j in range(4):
+					weights[i, j] = (weights[i, j] * self.scale_weight) // weight_sum
 
-		sw = self.scale_weight
-		dx = dx_fixed
-		dy = dy_fixed
+		# 累加16个像素的贡献
+		result = np.zeros(3, dtype=np.int64)
 
-		# 预计算 (1-dx) 和 (1-dy) 的定点表示
-		one_minus_dx = sw - dx
-		one_minus_dy = sw - dy
+		for m, offset_m in enumerate([-1, 0, 1, 2]):
+			for n, offset_n in enumerate([-1, 0, 1, 2]):
+				# 边界保护后的像素坐标
+				py = max(0, min(y_int + offset_m, src_h - 1))
+				px = max(0, min(x_int + offset_n, src_w - 1))
 
-		# 计算权重（使用 int64 防止溢出）
-		w00 = (np.int64(one_minus_dx) * one_minus_dy) >> self.w
-		w10 = (np.int64(dx) * one_minus_dy) >> self.w
-		w01 = (np.int64(one_minus_dx) * dy) >> self.w
-		w11 = (np.int64(dx) * dy) >> self.w
+				pixel = src_img[py, px].astype(np.int64)
+				result += pixel * weights[m, n]
 
-		# 定点插值计算
-		# result = (P00*w00 + P10*w10 + P01*w01 + P11*w11) >> w
-		# 像素是 uint8，权重是 Q0.w，乘积是 Q8.w，需要右移 w 位
-		result = (np.int64(p00) * w00 + np.int64(p10) * w10 +
-		          np.int64(p01) * w01 + np.int64(p11) * w11) >> self.w
+		# 右移 w 位归一化（因为权重是 Q0.w 格式）
+		result = result >> self.w
 
 		# 饱和到 0-255
 		result = np.clip(result, 0, 255).astype(np.uint8)
@@ -246,8 +282,8 @@ class BilinearFixed:
 				# 计算 X 方向原图坐标
 				x_int, dx_fixed = self._compute_src_coord_fixed(dst_x, inv_scale_x_fixed, src_w)
 
-				# 双线性插值（定点）
-				dst_img[dst_y, dst_x] = self._bilinear_interpolate_fixed(
+				# 双三次插值（定点）
+				dst_img[dst_y, dst_x] = self._bicubic_interpolate_fixed(
 					src_img, y_int, dy_fixed, x_int, dx_fixed)
 
 		return dst_img
@@ -287,14 +323,14 @@ class BilinearFixed:
 		os.makedirs(output_dir, exist_ok=True)
 
 		output_path = os.path.join(output_dir,
-			f"{base_name}_bilinear_fixed_{fixed_tag}_{size_tag}_{timestamp}.png")
+			f"{base_name}_bicubic_fixed_{fixed_tag}_{size_tag}_{timestamp}.png")
 		Image.fromarray(output_array).save(output_path)
 		print(f"输出图像: {output_path}")
 
 		return output_path
 
 
-def compare_fixed_configs(input_path, target_size=None, scale_factor=None):
+def compare_fixed_configs(input_path, scale_factor=None, target_size=None, a=-0.5):
 	# 对比不同定点配置的差异
 	#
 	# 评估 Qm.n 位宽和权重精度对最终画质的影响
@@ -320,12 +356,13 @@ def compare_fixed_configs(input_path, target_size=None, scale_factor=None):
 	for int_bits, frac_bits, weight_bits in configs:
 		print(f"\n测试 Q{int_bits}.{frac_bits} + Q0.{weight_bits}:")
 		try:
-			scaler = BilinearFixed(
+			scaler = BicubicFixed(
 				int_bits     = int_bits,
 				frac_bits    = frac_bits,
 				weight_bits  = weight_bits,
 				scale_factor = scale_factor,
-				target_size  = target_size
+				target_size  = target_size,
+				a            = a
 			)
 			result = scaler.process(img)
 			results[f"Q{int_bits}.{frac_bits}_w{weight_bits}"] = result
@@ -333,10 +370,11 @@ def compare_fixed_configs(input_path, target_size=None, scale_factor=None):
 			print(f"  错误: {e}")
 
 	# 如果有浮点参考，进行对比
-	from bilinear_float import BilinearFloat
-	float_scaler = BilinearFloat(
+	from bicubic_float import BicubicFloat
+	float_scaler = BicubicFloat(
 		scale_factor = scale_factor,
-		target_size  = target_size
+		target_size  = target_size,
+		a            = a
 	)
 	float_result = float_scaler.process(img)
 	results["Float"] = float_result
@@ -365,35 +403,40 @@ if __name__ == "__main__":
 
 	# 定点格式配置
 	INT_BITS    = 12   # 整数位
-	FRAC_BITS   = 8   # 坐标小数位
-	WEIGHT_BITS = 8   # 权重小数位（Q0.8）
+	FRAC_BITS   = 8    # 坐标小数位
+	WEIGHT_BITS = 12   # 权重小数位（Q0.12），双三次需要更高精度
+
+	# Keys滤波器参数
+	KEYS_A = -0.5  # Catmull-Rom
 
 	# 缩放参数（二选一）
 	SCALE_FACTOR = 3.0   # 放大2倍
 	TARGET_SIZE  = None  # 或指定 (width, height)
 
 	# 输入图像
+	# 输入图像路径（放在 test_images 目录下）
 	# INPUT_IMAGE = "test_images/test_pattern.png"
 	# INPUT_IMAGE = "test_images/侧脸纹理.png"
 	# INPUT_IMAGE = "test_images/文字球.png"
 	INPUT_IMAGE = "test_images/综合文字图形.png"
 
 	print("=" * 50)
-	print("双线性插值 - 定点实现")
+	print("双三次插值 - 定点实现")
 	print("=" * 50)
 
 	# 创建测试图（如果不存在）
 	if not os.path.exists(INPUT_IMAGE):
-		print(f"测试图片不存在，请先运行 bilinear_float.py 创建测试图")
+		print(f"测试图片不存在，请先运行 bicubic_float.py 创建测试图")
 		exit(1)
 
 	# 单配置测试
-	scaler = BilinearFixed(
+	scaler = BicubicFixed(
 		int_bits     = INT_BITS,
 		frac_bits    = FRAC_BITS,
 		weight_bits  = WEIGHT_BITS,
 		scale_factor = SCALE_FACTOR,
-		target_size  = TARGET_SIZE
+		target_size  = TARGET_SIZE,
+		a            = KEYS_A
 	)
 
 	output_path = scaler.process_and_save(
@@ -404,4 +447,4 @@ if __name__ == "__main__":
 
 	# 多配置对比（可选）
 	# print("\n")
-	# compare_fixed_configs(INPUT_IMAGE, TARGET_SIZE, SCALE_FACTOR)
+	# compare_fixed_configs(INPUT_IMAGE, TARGET_SIZE, SCALE_FACTOR, KEYS_A)

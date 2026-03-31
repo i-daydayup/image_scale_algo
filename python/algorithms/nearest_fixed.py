@@ -360,12 +360,14 @@ if __name__ == "__main__":
 	FRAC_BITS = 8   # 小数位
 
 	# 缩放参数（二选一）
-	SCALE_FACTOR = 2.0   # 放大2倍
+	SCALE_FACTOR = 3.0   # 放大2倍
 	TARGET_SIZE  = None  # 或指定 (width, height)
 
 	# 输入图像
 	# INPUT_IMAGE = "test_images/test_pattern.png"
-	INPUT_IMAGE = "test_images/绿球右上.png"
+	# INPUT_IMAGE = "test_images/侧脸纹理.png"
+	# INPUT_IMAGE = "test_images/文字球.png"
+	INPUT_IMAGE = "test_images/综合文字图形.png"
 
 
 	print("=" * 50)

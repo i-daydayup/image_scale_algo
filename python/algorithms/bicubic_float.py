@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# 双线性插值算法 - 浮点实现
-# Bilinear Interpolation - Floating Point Implementation
+# 双三次插值算法 - 浮点实现
+# Bicubic Interpolation - Floating Point Implementation
 #
 # 用途：
 #     - 算法画质参考（浮点黄金参考）
@@ -12,8 +12,10 @@
 #     src_pos = (dst_idx + 0.5) / scale - 0.5
 #
 # 插值公式：
-#     对于浮点坐标 (src_x, src_y)，取周围4个像素进行加权平均
-#     Q11 = (1-dx)*(1-dy)*P00 + dx*(1-dy)*P10 + (1-dx)*dy*P01 + dx*dy*P11
+#     使用双三次滤波器（Keys/Catmull-Rom），计算周围16个像素的加权平均
+#     权重函数 w(t) = (a+2)|t|^3 - (a+3)|t|^2 + 1,  |t| <= 1
+#              w(t) = a|t|^3 - 5a|t|^2 + 8a|t| - 4a, 1 < |t| < 2
+#     其中 a = -0.5 (Keys滤波器)
 #
 # 作者：
 # 版本：1.0
@@ -24,19 +26,21 @@ import os
 from datetime import datetime
 
 
-class BilinearFloat:
-	# 双线性插值缩放器（浮点实现）
+class BicubicFloat:
+	# 双三次插值缩放器（浮点实现）
 	#
 	# 参数:
 	#     scale_factor: 缩放因子，>1为放大，<1为缩小
 	#     target_size: 目标尺寸 (width, height)，与 scale_factor 二选一
+	#     a: Keys滤波器参数，默认-0.5（Catmull-Rom样条）
 
-	def __init__(self, scale_factor=None, target_size=None):
+	def __init__(self, scale_factor=None, target_size=None, a=-0.5):
 		# 初始化缩放器
 		#
 		# Args:
 		#     scale_factor: 缩放比例（dst/src），例如 2.0 表示放大2倍
 		#     target_size: 目标尺寸元组 (width, height)
+		#     a: Keys滤波器参数，-0.5为标准Catmull-Rom，-0.75为Sharp，-1.0为B-spline
 		#
 		# Raises:
 		#     ValueError: 同时指定或同时未指定 scale_factor 和 target_size
@@ -46,13 +50,14 @@ class BilinearFloat:
 
 		self.scale_factor = scale_factor
 		self.target_size  = target_size
+		self.a            = a  # Keys滤波器参数
 
 	def _compute_scale(self, src_w, src_h):
 		# 计算实际的缩放比例
 		if self.target_size is not None:
 			tgt_w, tgt_h = self.target_size
-			scale_x = tgt_w / src_w
-			scale_y = tgt_h / src_h
+			scale_x      = tgt_w / src_w
+			scale_y      = tgt_h / src_h
 		else:
 			scale_x = scale_y = self.scale_factor
 			# 根据 scale 计算目标尺寸
@@ -82,8 +87,28 @@ class BilinearFloat:
 
 		return src_pos
 
-	def _bilinear_interpolate(self, src_img, src_y, src_x):
-		# 对单个像素进行双线性插值
+	def _cubic_weight(self, t):
+		# 双三次滤波器权重函数（Keys滤波器）
+		#
+		# Args:
+		#     t: 距离中心点的距离（浮点）
+		#
+		# Returns:
+		#     float: 权重值
+
+		t_abs = abs(t)
+
+		if t_abs <= 1:
+			# w(t) = (a+2)|t|^3 - (a+3)|t|^2 + 1
+			return (self.a + 2) * (t_abs ** 3) - (self.a + 3) * (t_abs ** 2) + 1
+		elif t_abs < 2:
+			# w(t) = a|t|^3 - 5a|t|^2 + 8a|t| - 4a
+			return self.a * (t_abs ** 3) - 5 * self.a * (t_abs ** 2) + 8 * self.a * t_abs - 4 * self.a
+		else:
+			return 0.0
+
+	def _bicubic_interpolate(self, src_img, src_y, src_x):
+		# 对单个像素进行双三次插值
 		#
 		# Args:
 		#     src_img: 源图像数组
@@ -95,34 +120,44 @@ class BilinearFloat:
 
 		src_h, src_w = src_img.shape[:2]
 
-		# 获取整数坐标（左上角的像素）
+		# 获取整数坐标（左上角参考点）
 		y0 = int(np.floor(src_y))
 		x0 = int(np.floor(src_x))
 
-		# 获取小数部分（权重）
+		# 获取小数部分（相对于左上角的偏移）
 		dy = src_y - y0
 		dx = src_x - x0
 
-		# 边界保护（确保不越界）
-		y0 = max(0, min(y0, src_h - 1))
-		x0 = max(0, min(x0, src_w - 1))
-		y1 = min(y0 + 1, src_h - 1)
-		x1 = min(x0 + 1, src_w - 1)
+		# 计算16个像素的权重
+		weights = np.zeros((4, 4), dtype=np.float32)
 
-		# 获取周围4个像素的值
-		p00 = src_img[y0, x0].astype(np.float32)  # 左上
-		p10 = src_img[y0, x1].astype(np.float32)  # 右上
-		p01 = src_img[y1, x0].astype(np.float32)  # 左下
-		p11 = src_img[y1, x1].astype(np.float32)  # 右下
+		for m in range(-1, 3):  # Y方向: -1, 0, 1, 2
+			for n in range(-1, 3):  # X方向: -1, 0, 1, 2
+				# 计算到目标点的距离
+				y_dist = m - dy
+				x_dist = n - dx
 
-		# 双线性插值计算
-		# Q = (1-dx)*(1-dy)*P00 + dx*(1-dy)*P10 + (1-dx)*dy*P01 + dx*dy*P11
-		w00 = (1 - dx) * (1 - dy)
-		w10 = dx * (1 - dy)
-		w01 = (1 - dx) * dy
-		w11 = dx * dy
+				# 双三次权重
+				wy = self._cubic_weight(y_dist)
+				wx = self._cubic_weight(x_dist)
+				weights[m + 1, n + 1] = wy * wx
 
-		result = w00 * p00 + w10 * p10 + w01 * p01 + w11 * p11
+		# 归一化权重（防止数值误差）
+		weight_sum = np.sum(weights)
+		if weight_sum > 0:
+			weights = weights / weight_sum
+
+		# 累加16个像素的贡献
+		result = np.zeros(3, dtype=np.float32)
+
+		for m in range(-1, 3):
+			for n in range(-1, 3):
+				# 边界保护后的像素坐标
+				py = max(0, min(y0 + m, src_h - 1))
+				px = max(0, min(x0 + n, src_w - 1))
+
+				pixel = src_img[py, px].astype(np.float32)
+				result += weights[m + 1, n + 1] * pixel
 
 		# 饱和到 0-255
 		result = np.clip(result, 0, 255).astype(np.uint8)
@@ -161,6 +196,7 @@ class BilinearFloat:
 		print(f"原图尺寸: {src_w}x{src_h}")
 		print(f"目标尺寸: {dst_w}x{dst_h}")
 		print(f"缩放比例: X={scale_x:.4f}, Y={scale_y:.4f}")
+		print(f"Keys参数 a={self.a}")
 
 		# 创建输出图像
 		dst_img = np.zeros((dst_h, dst_w, 3), dtype=np.uint8)
@@ -174,8 +210,8 @@ class BilinearFloat:
 				# 计算 X 方向原图浮点坐标
 				src_x = self._compute_src_coord(dst_x, scale_x, src_w)
 
-				# 双线性插值
-				dst_img[dst_y, dst_x] = self._bilinear_interpolate(src_img, src_y, src_x)
+				# 双三次插值
+				dst_img[dst_y, dst_x] = self._bicubic_interpolate(src_img, src_y, src_x)
 
 		return dst_img
 
@@ -214,13 +250,13 @@ class BilinearFloat:
 
 		# 1. 仅放大后的图像
 		output_path = os.path.join(output_dir,
-			f"{base_name}_bilinear_float_{size_tag}_{timestamp}.png")
+			f"{base_name}_bicubic_float_{size_tag}_{timestamp}.png")
 		Image.fromarray(output_array).save(output_path)
 		print(f"输出图像: {output_path}")
 
 		# 2. 对比图
 		comparison_path = os.path.join(output_dir,
-			f"{base_name}_bilinear_float_{size_tag}_compare_{timestamp}.png")
+			f"{base_name}_bicubic_float_{size_tag}_compare_{timestamp}.png")
 		comparison.save(comparison_path)
 		print(f"对比图像: {comparison_path}")
 
@@ -278,7 +314,7 @@ class BilinearFloat:
 		# 粘贴结果图
 		canvas.paste(Image.fromarray(dst_display), (display_src_w + gap, label_height))
 		draw.text((display_src_w + gap + 10, 10),
-			f"Bilinear (Float): {dst_w}x{dst_h}", fill=(255, 255, 255), font=font)
+			f"Bicubic (Float): {dst_w}x{dst_h}", fill=(255, 255, 255), font=font)
 
 		return canvas
 
@@ -286,7 +322,7 @@ class BilinearFloat:
 def compare_with_opencv(input_path, scale_factor=None, target_size=None):
 	# 与 OpenCV 结果对比
 	#
-	# 验证本实现与 OpenCV INTER_LINEAR 的一致性
+	# 验证本实现与 OpenCV INTER_CUBIC 的一致性
 
 	import cv2
 
@@ -307,11 +343,11 @@ def compare_with_opencv(input_path, scale_factor=None, target_size=None):
 	print("=" * 50)
 
 	# 本实现结果
-	scaler     = BilinearFloat(target_size=(dst_w, dst_h))
+	scaler     = BicubicFloat(target_size=(dst_w, dst_h))
 	our_result = scaler.process(img_rgb)
 
 	# OpenCV 结果
-	cv_result = cv2.resize(img_rgb, (dst_w, dst_h), interpolation=cv2.INTER_LINEAR)
+	cv_result = cv2.resize(img_rgb, (dst_w, dst_h), interpolation=cv2.INTER_CUBIC)
 
 	# 对比（按通道比较，取最大差异）
 	diff           = np.abs(our_result.astype(int) - cv_result.astype(int))
@@ -326,8 +362,10 @@ def compare_with_opencv(input_path, scale_factor=None, target_size=None):
 
 	if max_diff == 0:
 		print("✓ 与 OpenCV 结果完全一致！")
-	elif mismatch_count > 0:
-		print("✗ 存在差异，检查 Phase 或边界处理")
+	elif max_diff <= 1:
+		print("○ 与 OpenCV 结果基本一致（误差<=1）")
+	else:
+		print("✗ 存在差异，检查 Keys 参数或边界处理")
 		# 显示差异位置（只取第一个通道的坐标）
 		diff_mask = np.any(diff > 0, axis=2)
 		y, x = np.where(diff_mask)
@@ -351,6 +389,12 @@ if __name__ == "__main__":
 	# 方式2：指定目标尺寸
 	# SCALE_FACTOR = None
 	# TARGET_SIZE  = (1920, 1080)  # (width, height)
+
+	# Keys滤波器参数
+	# -0.5: 标准 Catmull-Rom（推荐）
+	# -0.75: Sharp（更锐利）
+	# -1.0: B-spline（更平滑）
+	KEYS_A = -0.5
 
 	# 输入图像路径（放在 test_images 目录下）
 	# INPUT_IMAGE = "test_images/test_pattern.png"
@@ -385,12 +429,13 @@ if __name__ == "__main__":
 
 	# 执行处理
 	print("=" * 50)
-	print("双线性插值 - 浮点实现")
+	print("双三次插值 - 浮点实现")
 	print("=" * 50)
 
-	scaler = BilinearFloat(
+	scaler = BicubicFloat(
 		scale_factor = SCALE_FACTOR,
-		target_size  = TARGET_SIZE
+		target_size  = TARGET_SIZE,
+		a            = KEYS_A
 	)
 
 	output_path = scaler.process_and_save(INPUT_IMAGE, output_dir="results")

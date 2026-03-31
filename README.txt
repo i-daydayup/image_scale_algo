@@ -1,3 +1,6 @@
+# 20260331二
+完成最近邻、双线性、双立方、Lanczos的浮点代码验证
+
 # 20260328六
 
 视频图像缩放算法研究分析
@@ -9,7 +12,7 @@ D:\Projects\
     │   ├── algorithms\            # 你的算法实现
     │   │   ├── __init__.py
     │   │   ├── bilinear.py        # 双线性插值
-    │   │   ├── bicubic.py         # 双三次插值
+    │   │   ├── bicubic.py         # 双立方插值
     │   │   └── nearest.py         # 最近邻（对比用）
     │   ├── testbench\             # 测试框架
     │   │   ├── test_resize.py     # 主测试脚本

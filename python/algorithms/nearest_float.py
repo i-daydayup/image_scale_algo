@@ -305,15 +305,18 @@ if __name__ == "__main__":
 	# 配置参数（直接修改这里，无需命令行）
 
 	# 方式1：使用缩放比例（放大2倍）
-	# SCALE_FACTOR = 2.0
-	# TARGET_SIZE  = None  # (1920, 1080)
+	SCALE_FACTOR = 2.5
+	TARGET_SIZE  = None  # (1920, 1080)
 
 	# 方式2：指定目标尺寸
-	SCALE_FACTOR = None
-	TARGET_SIZE  = (1920, 1080)  # (width, height)
+	# SCALE_FACTOR = None
+	# TARGET_SIZE  = (1920, 1080)  # (width, height)
 
 	# 输入图像路径（放在 test_images 目录下）
-	INPUT_IMAGE = "test_images/test_pattern.png"
+	# INPUT_IMAGE = "test_images/test_pattern.png"
+	# INPUT_IMAGE = "test_images/侧脸纹理.png"
+	# INPUT_IMAGE = "test_images/文字球.png"
+	INPUT_IMAGE = "test_images/综合文字图形.png"
 
 	# 如果测试图片不存在，创建一个标准测试图
 	if not os.path.exists(INPUT_IMAGE):
