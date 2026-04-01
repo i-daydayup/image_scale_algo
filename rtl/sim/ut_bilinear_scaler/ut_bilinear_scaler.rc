@@ -2,7 +2,7 @@ Magic 271485
 Revision 5.4v9
 
 ; Window Layout <x> <y> <width> <height> <signalwidth> <valuewidth>
-viewPort 50 214 1359 749 100 65
+viewPort -8 -8 1744 1128 210 65
 
 ; File list:
 ; openDirFile [-d delimiter] [-s time_offset] [-rf auto_bus_rule_file] path_name file_name
@@ -15,17 +15,19 @@ openDirFile -d / "" "D:\Projects\image_scale_algo\rtl\sim\ut_bilinear_scaler\ut_
 signalSpacing 3
 
 ; windowTimeUnit is used for zoom, cursor & marker
+windowTimeUnit 10ns
+
 ; waveform viewport range
-zoom 0.000000 0.100000
-cursor 0.000000
-marker 0.000000
+zoom 19783.607702 33590.917244 10n
+cursor 305.500000
+marker 107.500000
 
 ; user define markers
 ; userMarker time_pos marker_name
 ; visible top row signal index
 top 0
 ; marker line index
-markerPos 19
+markerPos 14
 
 ; event list
 ; addEvent event_name event_expression
@@ -54,12 +56,13 @@ addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_inv_scale_y[19:0]
 addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_src_height[15:0]
 addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_src_width[15:0]
 addSignal -h 15 -holdScope clk
-addSignal -h 15 -UNSIGNED -HEX -holdScope i_data[7:0]
+addSignal -h 15 -UNSIGNED -UDEC -holdScope i_data[7:0]
 addSignal -h 15 -holdScope i_frame_start
 addSignal -h 15 -holdScope i_last
 addSignal -h 15 -holdScope i_valid
 addSignal -h 15 -holdScope o_ready
 addSignal -h 15 -holdScope rst_n
+addSignal -h 15 -UNSIGNED -UDEC /ut_bilinear_scaler/frame_cnt[31:0]
 addGroup "G2"
 addSignal -h 15 /ut_bilinear_scaler/dut/i_ready
 addSignal -h 15 -UNSIGNED -HEX -holdScope o_data[7:0]
@@ -67,6 +70,21 @@ addSignal -h 15 -holdScope o_frame_start
 addSignal -h 15 -holdScope o_last
 addSignal -h 15 -holdScope o_valid
 addGroup "G3"
+addSignal -h 15 -UNSIGNED -HEX /ut_bilinear_scaler/dut/interp_result[7:0]
+addSignal -h 15 -UNSIGNED -HEX /ut_bilinear_scaler/dut/u_interp/sum[17:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope p00_w00[15:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope p10_w10[15:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope p01_w01[15:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope p11_w11[15:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope p11_reg[7:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope p11[7:0]
+addSignal -h 15 -UNSIGNED -HEX /ut_bilinear_scaler/dut/lb_rdata1[7:0]
+addSignal -h 15 -holdScope swap_d1
+addSignal -h 15 -UNSIGNED -HEX -holdScope raddr_d1[9:0]
+addSignal -h 15 -UNSIGNED -UDEC -holdScope lb_waddr[9:0]
+addSignal -h 15 -holdScope lb_wen
+addSignal -h 15 -holdScope lb_swap
+addGroup "G4"
 
 ; grid status
 ; gridSignal signal_name
@@ -83,11 +101,14 @@ getSignalForm close
 
 "/std"
 "/ut_bilinear_scaler"
+"/ut_bilinear_scaler/dut"
+"/ut_bilinear_scaler/dut/u_interp"
 
 SCOPE_LIST_BEGIN
 "/std"
-"/ut_bilinear_scaler"
+"/ut_bilinear_scaler/dut/u_interp"
 "/ut_bilinear_scaler/dut"
+"/ut_bilinear_scaler"
 SCOPE_LIST_END
 
 GETSIGNALFORM_SCOPE_HIERARCHY_END

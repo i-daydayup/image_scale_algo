@@ -34,9 +34,9 @@ module ut_bilinear_scaler;
 
 	// 测试图像参数
 	parameter SRC_WIDTH    = 100 ;
-	parameter SRC_HEIGHT   = 100 ;
+	parameter SRC_HEIGHT   = 10 ;
 	parameter DST_WIDTH    = 200 ;
-	parameter DST_HEIGHT   = 200 ;
+	parameter DST_HEIGHT   = 20 ;
 	parameter SCALE_FACTOR = 2.0 ;
 
 	// 计算逆缩放比例定点值
@@ -92,8 +92,8 @@ module ut_bilinear_scaler;
 		.cfg_src_height  (cfg_src_height   ),//I16,
 		.i_valid         (i_valid          ),//I1,
 		.i_data          (i_data           ),//I8,
-		.i_last          (i_last           ),//I1,
-		.i_frame_start   (i_frame_start    ),//I1,
+		.i_last          (i_last           ),//I1, 注意，仅1拍有效
+		.i_frame_start   (i_frame_start    ),//I1, 注意，仅1拍有效
 		.i_ready         (i_ready          ),//O1,
 		.o_valid         (o_valid          ),//O1,
 		.o_data          (o_data           ),//O8,
@@ -117,15 +117,17 @@ module ut_bilinear_scaler;
 	//------------------------------------------------------------------------
 	// 测试激励
 	//------------------------------------------------------------------------
-	integer row, col   ;
-	integer out_file   ;
-	integer pixel_count;
+	integer row, col   	;
+	integer out_file   	;
+	integer pixel_count	;
+	integer frame_cnt	;
 
 	localparam EXPECTED_PIXELS = DST_WIDTH * DST_HEIGHT;
 	localparam OUTPUT_TIMEOUT  = EXPECTED_PIXELS * 1 + 1000;  // 1倍余量
 
 	initial begin
 		// 初始化信号
+		frame_cnt		= 0;
 		rst_n           = 1'b0;
 		i_valid         = 1'b0;
 		i_data          = 8'h00;
@@ -155,62 +157,74 @@ module ut_bilinear_scaler;
 
 		// 打开输出文件
 		out_file = $fopen("output_verilog.hex", "w");
+	end
 
+	always begin: send_frame_block
 		// 发送帧开始
 		@(posedge clk);
-		i_frame_start = 1;
-		i_valid       = 1;
-		i_data        = 8'h00;
+		i_frame_start = 1'b1;
+		i_valid       = 1'b1;
+		i_data        = 8'hf5;
 
 		// 发送测试图像数据 (水平渐变)
 		for (row = 0; row < SRC_HEIGHT; row = row + 1) begin
 			for (col = 0; col < SRC_WIDTH; col = col + 1) begin
 				@(posedge clk);
-				i_frame_start = 0;
+				i_frame_start = 1'b0;
+				i_valid       = 1'b1;
 				i_data        = col;  // 水平渐变：0 ~ 99
 				i_last        = (col == SRC_WIDTH - 1);
 
-				// 每10行显示一次进度
-				if (col == 0 && row % 10 == 0)
-					$display("发送行 %0d / %0d", row, SRC_HEIGHT);
+				// // 每10行显示一次进度。直接看波形，就不打印了。
+				// if (col == 0 && row % 10 == 0)
+				// 	$display("发送行 %0d / %0d", row, SRC_HEIGHT);
 			end
+			@(posedge clk);
+			i_valid		= 1'b0;
+			i_last		= 1'b0;
+			repeat(50) @(posedge clk);
 		end
 
 		@(posedge clk);
-		i_valid = 0;
-		i_last  = 0;
-
-		$display("输入数据发送完成，等待输出...");
-
-		//------------------------------------------------------------------------
-		// 等待输出完成
-		//------------------------------------------------------------------------
-		pixel_count = 0;
-		repeat (10000) begin : wait_output_block
-			@(posedge clk);
-			if (o_valid == 1'b1) begin
-				$fwrite(out_file, "%02x\n", o_data);
-				pixel_count = pixel_count + 1;
-
-				if (pixel_count % 1000 == 0)
-					$display("输出像素数: %0d / %0d", pixel_count, DST_WIDTH * DST_HEIGHT);
-
-				if (pixel_count >= OUTPUT_TIMEOUT)
-					disable wait_output_block;
-			end
-		end
-
-		$fclose(out_file);
-
-		$display("============================================");
-		$display("测试完成");
-		$display("输出像素数: %0d", pixel_count);
-		$display("输出文件: output_verilog.hex");
-		$display("============================================");
-
-		#(CLK_PERIOD * 10);
-		// $finish;
+		i_valid 		= 1'b0;
+		i_last  		= 1'b0;
+		i_frame_start	= 1'b0;
+		repeat(200) @(posedge clk);
+		//一帧发送结束，循环发送下一帧
+		frame_cnt = frame_cnt + 1'b1;
 	end
+
+		// $display("输入数据发送完成，等待输出...");
+
+		// //------------------------------------------------------------------------
+		// // 等待输出完成
+		// //------------------------------------------------------------------------
+		// pixel_count = 0;
+		// repeat (10000) begin : wait_output_block
+		// 	@(posedge clk);
+		// 	if (o_valid == 1'b1) begin
+		// 		$fwrite(out_file, "%02x\n", o_data);
+		// 		pixel_count = pixel_count + 1;
+
+		// 		if (pixel_count % 1000 == 0)
+		// 			$display("输出像素数: %0d / %0d", pixel_count, DST_WIDTH * DST_HEIGHT);
+
+		// 		if (pixel_count >= OUTPUT_TIMEOUT)
+		// 			disable wait_output_block;
+		// 	end
+		// end
+
+		// $fclose(out_file);
+
+		// $display("============================================");
+		// $display("测试完成");
+		// $display("输出像素数: %0d", pixel_count);
+		// $display("输出文件: output_verilog.hex");
+		// $display("============================================");
+
+		// #(CLK_PERIOD * 10);
+		// // $finish;
+	// end
 
 	//------------------------------------------------------------------------
 	// 波形转储
@@ -227,13 +241,13 @@ module ut_bilinear_scaler;
 		$fsdbDumpflush;
 	end
 
-	//------------------------------------------------------------------------
-	// 超时检测
-	//------------------------------------------------------------------------
-	initial begin
-		#(CLK_PERIOD * 50000);
-		$display("错误：仿真超时！");
-		// $finish;
-	end
+	// //------------------------------------------------------------------------
+	// // 超时检测
+	// //------------------------------------------------------------------------
+	// initial begin
+	// 	#(CLK_PERIOD * 50000);
+	// 	$display("错误：仿真超时！");
+	// 	// $finish;
+	// end
 
 endmodule

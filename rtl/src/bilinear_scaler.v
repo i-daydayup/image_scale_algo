@@ -237,6 +237,7 @@ module bilinear_scaler #(
 	assign lb_rdata1 = swap_d1 ? line_buffer_0[raddr_d1] : line_buffer_1[raddr_d1];
 
 	// 行缓冲控制逻辑
+	// 20260401三|魏：行结束时，应该多写一个地址，包括起点0和1也应该是相同的内容，代表边界多写。
 	always @(posedge clk or negedge rst_n) begin
 		if (rst_n == 1'b0) begin
 			lb_wen   <= 0;
@@ -250,7 +251,7 @@ module bilinear_scaler #(
 			lb_wen   <= #U_DLY 1;
 			lb_wdata <= #U_DLY i_data;
 			lb_waddr <= #U_DLY src_x_cnt;
-			
+
 			if (i_last == 1'b1) begin
 				// 行结束，交换缓冲
 				lb_swap <= #U_DLY ~lb_swap;
