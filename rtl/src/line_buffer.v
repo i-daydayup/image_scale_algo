@@ -27,34 +27,39 @@ module line_buffer #(
 	parameter LINE_WIDTH = 1920, // 最大行宽度
 	parameter LINE_COUNT = 2     // 缓冲行数 (固定为2)
 )(
-	input  wire                          clk,
-	input  wire                          rst_n,
+	input  wire                          clk	,//I1,
+	input  wire                          rst_n	,//I1,
 
 	// 写入接口
-	input  wire                          wr_en,      // 写使能
-	input  wire [$clog2(LINE_WIDTH)-1:0] wr_addr,    // 写地址
-	input  wire [DATA_WIDTH-1:0]         wr_data,    // 写数据
+	input  wire                          wr_en	,//I1,写使能
+	input  wire [$clog2(LINE_WIDTH)-1:0] wr_addr	,//Ix,写地址
+	input  wire [DATA_WIDTH-1:0]         wr_data	,//Ix,写数据
 
 	// 读出接口
-	input  wire                          rd_en,      // 读使能
-	input  wire [$clog2(LINE_WIDTH)-1:0] rd_addr,    // 读地址
-	output reg  [DATA_WIDTH-1:0]         rd_data_0,  // 当前行读数据
-	output reg  [DATA_WIDTH-1:0]         rd_data_1,  // 前一行读数据
-	output reg                           rd_valid,   // 读数据有效
+	input  wire                          rd_en	,//I1,读使能
+	input  wire [$clog2(LINE_WIDTH)-1:0] rd_addr	,//Ix,读地址
+	output reg  [DATA_WIDTH-1:0]         rd_data_0	,//Ox,当前行读数据
+	output reg  [DATA_WIDTH-1:0]         rd_data_1	,//Ox,前一行读数据
+	output reg                           rd_valid	,//O1,读数据有效
 
 	// 控制接口
-	input  wire                          swap        // 行交换信号（高电平有效）
+	input  wire                          swap	,//I1,行交换信号（高电平有效）
 );
+
+	//------------------------------------------------------------------------
+	// 仿真延时参数
+	//------------------------------------------------------------------------
+	localparam U_DLY = 1;
 
 	//------------------------------------------------------------------------
 	// 存储器定义
 	//------------------------------------------------------------------------
 	// 两行缓冲，使用标准 Verilog 数组
-	reg [DATA_WIDTH-1:0] line_buf_0 [0:LINE_WIDTH-1];  // 当前行
-	reg [DATA_WIDTH-1:0] line_buf_1 [0:LINE_WIDTH-1];  // 前一行
+	reg [DATA_WIDTH-1:0] line_buf_0 [0:LINE_WIDTH-1];         // 当前行
+	reg [DATA_WIDTH-1:0] line_buf_1 [0:LINE_WIDTH-1];         // 前一行
 
 	// 当前写入的行选择
-	reg wr_sel;
+	reg                          wr_sel;
 
 	//------------------------------------------------------------------------
 	// 写入控制
@@ -65,7 +70,7 @@ module line_buffer #(
 			wr_sel <= 0;
 		end
 		else if (swap == 1'b1) begin
-			wr_sel <= ~wr_sel;
+			wr_sel <= #U_DLY ~wr_sel;
 		end
 	end
 
@@ -73,9 +78,9 @@ module line_buffer #(
 	always @(posedge clk) begin
 		if (wr_en == 1'b1) begin
 			if (wr_sel == 1'b1)
-				line_buf_1[wr_addr] <= wr_data;
+				line_buf_1[wr_addr] <= #U_DLY wr_data;
 			else
-				line_buf_0[wr_addr] <= wr_data;
+				line_buf_0[wr_addr] <= #U_DLY wr_data;
 		end
 	end
 
@@ -83,14 +88,14 @@ module line_buffer #(
 	// 读出控制
 	// 时序：1拍延迟
 	//------------------------------------------------------------------------
-	reg rd_sel;
+	reg                          rd_sel;
 
 	always @(posedge clk or negedge rst_n) begin
 		if (rst_n == 1'b0) begin
 			rd_sel <= 0;
 		end
 		else if (swap == 1'b1) begin
-			rd_sel <= ~rd_sel;
+			rd_sel <= #U_DLY ~rd_sel;
 		end
 	end
 
@@ -99,8 +104,8 @@ module line_buffer #(
 	reg                          rd_en_reg;
 
 	always @(posedge clk) begin
-		rd_addr_reg <= rd_addr;
-		rd_en_reg   <= rd_en;
+		rd_addr_reg <= #U_DLY rd_addr;
+		rd_en_reg   <= #U_DLY rd_en;
 	end
 
 	// 读出数据（根据当前swap状态选择）
@@ -108,14 +113,14 @@ module line_buffer #(
 	// 当 wr_sel=1 时：buf_1是当前行，buf_0是前一行
 	always @(posedge clk) begin
 		if (rd_sel == 1'b1) begin
-			rd_data_0 <= line_buf_1[rd_addr_reg];  // 当前行
-			rd_data_1 <= line_buf_0[rd_addr_reg];  // 前一行
+			rd_data_0 <= #U_DLY line_buf_1[rd_addr_reg];  // 当前行
+			rd_data_1 <= #U_DLY line_buf_0[rd_addr_reg];  // 前一行
 		end
 		else begin
-			rd_data_0 <= line_buf_0[rd_addr_reg];  // 当前行
-			rd_data_1 <= line_buf_1[rd_addr_reg];  // 前一行
+			rd_data_0 <= #U_DLY line_buf_0[rd_addr_reg];  // 当前行
+			rd_data_1 <= #U_DLY line_buf_1[rd_addr_reg];  // 前一行
 		end
-		rd_valid <= rd_en_reg;
+		rd_valid <= #U_DLY rd_en_reg;
 	end
 
 endmodule

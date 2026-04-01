@@ -120,7 +120,7 @@ module tb_bilinear_scaler;
 		i_last          = 0;
 		i_frame_start   = 0;
 		o_ready         = 1;
-		
+
 		cfg_inv_scale_x = INV_SCALE_X;
 		cfg_inv_scale_y = INV_SCALE_Y;
 		cfg_dst_width   = DST_WIDTH;
@@ -156,7 +156,7 @@ module tb_bilinear_scaler;
 				i_frame_start = 0;
 				i_data        = col;  // 水平渐变：0 ~ 99
 				i_last        = (col == SRC_WIDTH - 1);
-				
+
 				// 每10行显示一次进度
 				if (col == 0 && row % 10 == 0)
 					$display("发送行 %0d / %0d", row, SRC_HEIGHT);
@@ -176,10 +176,10 @@ module tb_bilinear_scaler;
 			if (o_valid) begin
 				$fwrite(out_file, "%02x\n", o_data);
 				pixel_count = pixel_count + 1;
-				
+
 				if (pixel_count % 1000 == 0)
 					$display("输出像素数: %0d / %0d", pixel_count, DST_WIDTH * DST_HEIGHT);
-				
+
 				if (pixel_count >= DST_WIDTH * DST_HEIGHT)
 					disable wait_output;
 			end

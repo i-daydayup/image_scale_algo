@@ -247,6 +247,46 @@ wire [15:0]                          src_size;   // I16
 3. 位宽后空一格写信号名
 4. 信号名后空格调节，使 `//` 对齐
 
+#### 端口信号位宽注释规范（便于例化核对）
+
+端口声明时，在信号名后添加位宽注释，格式为 `,//方向位宽,注释`：
+
+```verilog
+// 正确示例：位宽注释紧跟逗号
+input  wire                          clk	,//I1,
+input  wire                          rst_n	,//I1,
+
+// 写入接口
+input  wire                          wr_en	    ,//I1,写使能
+input  wire [$clog2(LINE_WIDTH)-1:0] wr_addr	,//Ix,写地址
+input  wire [DATA_WIDTH-1:0]         wr_data	,//Ix,写数据
+
+// 读出接口
+input  wire                          rd_en	    ,//I1,读使能
+input  wire [$clog2(LINE_WIDTH)-1:0] rd_addr	,//Ix,读地址
+output reg  [DATA_WIDTH-1:0]         rd_data_0	,//Ox,当前行读数据
+output reg  [DATA_WIDTH-1:0]         rd_data_1	,//Ox,前一行读数据
+output reg                           rd_valid	,//O1,读数据有效
+
+// 控制接口
+input  wire                          swap	,//I1,行交换信号（高电平有效）
+```
+
+**格式规则：**
+1. **逗号对齐**：信号名后的逗号对齐（通过制表符/空格调节）
+2. **位宽注释格式**：`//` 紧跟逗号，无空格
+3. **方向位宽**：`I{n}` 表示 n 位输入，`O{n}` 表示 n 位输出，`Ix`/`Ox` 表示位宽由参数决定
+4. **逗号分隔**：方向位宽后用逗号，再接注释文字
+
+**位宽标记规范：**
+| 标记 | 含义 | 示例 |
+|------|------|------|
+| `I1` | 1位输入 | `clk	,//I1,` |
+| `I8` | 8位输入 | `i_data	,//I8,` |
+| `Ix` | 位宽由参数决定 | `wr_addr	,//Ix,`（`[$clog2(LINE_WIDTH)-1:0]`）|
+| `O1` | 1位输出 | `o_valid	,//O1,` |
+| `Ox` | 位宽由参数决定 | `wr_data	,//Ox,`（`[DATA_WIDTH-1:0]`）|
+
 ### 3.2 命名规范
 ```verilog
 // 模块名：snake_case
@@ -264,6 +304,7 @@ wire        clk;
 wire        rst_n;            // 低电平有效复位，_n 后缀
 
 // 参数/宏定义
+localparam U_DLY      = 1;
 localparam DATA_WIDTH = 8;
 localparam IMG_WIDTH  = 1920;
 
@@ -360,6 +401,7 @@ module example (
     //------------------------------------------------------------------------
     // 参数定义
     //------------------------------------------------------------------------
+    localparam U_DLY = 1;
     localparam IDLE  = 3'b000;
     localparam READ  = 3'b001;
     // ...
@@ -374,7 +416,7 @@ module example (
     reg       frame_start;
 
     // 数据路径
-    reg [7:0] pixel_reg [0:3];  // 4-tap 滤波器寄存器
+    reg [7:0]  pixel_reg [0:3];  // 4-tap 滤波器寄存器
     reg [15:0] accumulator;
 
     // 计数器
@@ -406,17 +448,17 @@ module example (
             state <= IDLE;
         end
         else begin
-            state <= next_state;
+            state <= #U_DLY next_state;
         end
     end
 
     // 数据路径
     always @(posedge clk) begin
         if (pixel_valid == 1'b1) begin
-            pixel_reg[0] <= pixel_reg[1];
-            pixel_reg[1] <= pixel_reg[2];
-            pixel_reg[2] <= pixel_reg[3];
-            pixel_reg[3] <= i_data;
+            pixel_reg[0] <= #U_DLY pixel_reg[1];
+            pixel_reg[1] <= #U_DLY pixel_reg[2];
+            pixel_reg[2] <= #U_DLY pixel_reg[3];
+            pixel_reg[3] <= #U_DLY i_data;
         end
     end
 
@@ -434,10 +476,10 @@ always @(posedge clk or negedge rst_n) begin
         state <= IDLE;
     end
     else if (start == 1'b1) begin
-        state <= READ;
+        state <= #U_DLY READ;
     end
     else begin
-        state <= next_state;
+        state <= #U_DLY next_state;
     end
 end
 
@@ -459,10 +501,10 @@ if (rst_n == 1'b0) begin
     state <= IDLE;
 end
 else if (start == 1'b1) begin
-    state <= READ;
+    state <= #U_DLY READ;
 end
 else begin
-    state <= next_state;
+    state <= #U_DLY next_state;
 end
 
 // 错误：else 跟在 end 后面
@@ -473,14 +515,46 @@ end else begin               // 禁止：else 应换行
 end
 ```
 
+**3. 添加U_DLY用于仿真，异步复位下的<=不添加，同步逻辑<=后需要添加U_DLY：**
+
+```verilog
+// 正确：同步逻辑添加U_DLY模拟信号延时，异步复位不添加
+always @(posedge clk or negedge rst_n) begin
+    if (rst_n == 1'b0) begin
+        state <= IDLE;
+    end
+    else if (start == 1'b1) begin
+        state <= #U_DLY READ;
+    end
+    else begin
+        state <= #U_DLY next_state;
+    end
+end
+
+// 错误：异步复位添加了U_DLY，而同步复位没添加
+always @(posedge clk or negedge rst_n) begin
+    if (rst_n == 1'b0) begin
+        state <= #U_DLY IDLE;
+    end
+    else if (start == 1'b1) begin
+        state <= READ;
+    end
+    else begin
+        state <= next_state;
+    end
+end
+```
+
+
 ### 3.6 定点数运算规范
 
 ```verilog
 // Qm.n 格式定义：m位整数，n位小数
 // 例如 Q8.8: 8位整数，8位小数，共16位
 
-localparam INT_BITS  = 8;   // 整数位
-localparam FRAC_BITS = 8;   // 小数位
+localparam U_DLY      = 1;
+localparam INT_BITS   = 8;   // 整数位
+localparam FRAC_BITS  = 8;   // 小数位
 localparam TOTAL_BITS = INT_BITS + FRAC_BITS;
 
 // 定点数乘法 (结果需要右移 FRAC_BITS 位)
@@ -489,8 +563,8 @@ reg [TOTAL_BITS*2-1:0] mult_temp;
 reg [TOTAL_BITS-1:0]   mult_result;
 
 always @(posedge clk) begin
-    mult_temp    <= coeff * pixel_value;        // 乘法
-    mult_result  <= mult_temp >> FRAC_BITS;     // 右移取整
+    mult_temp    <= #U_DLY coeff * pixel_value;        // 乘法
+    mult_result  <= #U_DLY mult_temp >> FRAC_BITS;     // 右移取整
 end
 
 // 定点数加/减法：直接运算，注意溢出处理
@@ -696,17 +770,19 @@ module line_buffer #(
     output reg                   rd_valid
 );
 
-    reg [DATA_WIDTH-1:0] mem [0:LINE_WIDTH-1];
+    localparam U_DLY = 1;
+
+    reg [DATA_WIDTH-1:0]         mem [0:LINE_WIDTH-1];
     reg [$clog2(LINE_WIDTH)-1:0] wr_addr;
     reg [$clog2(LINE_WIDTH)-1:0] rd_addr;
 
     always @(posedge clk) begin
-        if (wr_en)
-            mem[wr_addr] <= wr_data;
+        if (wr_en == 1'b1)
+            mem[wr_addr] <= #U_DLY wr_data;
     end
 
     always @(posedge clk) begin
-        rd_data <= mem[rd_addr];
+        rd_data <= #U_DLY mem[rd_addr];
     end
 
     // 地址逻辑...
