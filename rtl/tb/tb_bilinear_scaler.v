@@ -20,51 +20,51 @@ module tb_bilinear_scaler;
 	//------------------------------------------------------------------------
 	// 参数定义
 	//------------------------------------------------------------------------
-	parameter DATA_WIDTH  = 8;
-	parameter INT_BITS    = 12;
-	parameter FRAC_BITS   = 8;
-	parameter WEIGHT_BITS = 8;
+	parameter DATA_WIDTH  = 8                   ;
+	parameter INT_BITS    = 12                  ;
+	parameter FRAC_BITS   = 8                   ;
+	parameter WEIGHT_BITS = 8                   ;
 	parameter COORD_BITS  = INT_BITS + FRAC_BITS;
-	parameter CLK_PERIOD  = 10;  // 100MHz
+	parameter CLK_PERIOD  = 10                  ;// 100MHz
 
 	// 测试图像参数
-	parameter SRC_WIDTH    = 100;
-	parameter SRC_HEIGHT   = 100;
-	parameter DST_WIDTH    = 200;
-	parameter DST_HEIGHT   = 200;
-	parameter SCALE_FACTOR = 2.0;
+	parameter SRC_WIDTH    = 100 ;
+	parameter SRC_HEIGHT   = 100 ;
+	parameter DST_WIDTH    = 200 ;
+	parameter DST_HEIGHT   = 200 ;
+	parameter SCALE_FACTOR = 2.0 ;
 
 	// 计算逆缩放比例定点值
-	parameter INV_SCALE_X = (SRC_WIDTH * (1 << FRAC_BITS)) / DST_WIDTH;
+	parameter INV_SCALE_X = (SRC_WIDTH * (1 << FRAC_BITS)) / DST_WIDTH ;
 	parameter INV_SCALE_Y = (SRC_HEIGHT * (1 << FRAC_BITS)) / DST_HEIGHT;
 
 	//------------------------------------------------------------------------
 	// 信号声明
 	//------------------------------------------------------------------------
-	reg                  clk;
-	reg                  rst_n;
+	reg                                clk          ;
+	reg                                rst_n        ;
 
 	// 配置接口
-	reg  [COORD_BITS-1:0] cfg_inv_scale_x;
-	reg  [COORD_BITS-1:0] cfg_inv_scale_y;
-	reg  [15:0]           cfg_dst_width;
-	reg  [15:0]           cfg_dst_height;
-	reg  [15:0]           cfg_src_width;
-	reg  [15:0]           cfg_src_height;
+	reg  [COORD_BITS-1:0]              cfg_inv_scale_x ;
+	reg  [COORD_BITS-1:0]              cfg_inv_scale_y ;
+	reg  [15:0]                        cfg_dst_width   ;
+	reg  [15:0]                        cfg_dst_height  ;
+	reg  [15:0]                        cfg_src_width   ;
+	reg  [15:0]                        cfg_src_height  ;
 
 	// 输入接口
-	reg                   i_valid;
-	reg  [DATA_WIDTH-1:0] i_data;
-	reg                   i_last;
-	reg                   i_frame_start;
-	wire                  i_ready;
+	reg                                i_valid       ;
+	reg  [DATA_WIDTH-1:0]              i_data        ;
+	reg                                i_last        ;
+	reg                                i_frame_start ;
+	wire                               i_ready       ;
 
 	// 输出接口
-	wire                  o_valid;
-	wire [DATA_WIDTH-1:0] o_data;
-	wire                  o_last;
-	wire                  o_frame_start;
-	reg                   o_ready;
+	wire                               o_valid       ;
+	wire [DATA_WIDTH-1:0]              o_data        ;
+	wire                               o_last        ;
+	wire                               o_frame_start ;
+	reg                                o_ready       ;
 
 	//------------------------------------------------------------------------
 	// DUT 实例化

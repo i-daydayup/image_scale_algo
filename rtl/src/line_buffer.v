@@ -23,27 +23,27 @@
 `timescale 1ns / 1ps
 
 module line_buffer #(
-	parameter DATA_WIDTH = 8,    // 像素数据位宽
-	parameter LINE_WIDTH = 1920, // 最大行宽度
+	parameter DATA_WIDTH = 8    ,// 像素数据位宽
+	parameter LINE_WIDTH = 1920 ,// 最大行宽度
 	parameter LINE_COUNT = 2     // 缓冲行数 (固定为2)
 )(
-	input  wire                          clk	,//I1,
-	input  wire                          rst_n	,//I1,
+	input  wire                          clk      ,//I1,
+	input  wire                          rst_n    ,//I1,
 
 	// 写入接口
-	input  wire                          wr_en	,//I1,写使能
-	input  wire [$clog2(LINE_WIDTH)-1:0] wr_addr	,//Ix,写地址
-	input  wire [DATA_WIDTH-1:0]         wr_data	,//Ix,写数据
+	input  wire                          wr_en    ,//I1,写使能
+	input  wire [$clog2(LINE_WIDTH)-1:0] wr_addr  ,//Ix,写地址
+	input  wire [DATA_WIDTH-1:0]         wr_data  ,//Ix,写数据
 
 	// 读出接口
-	input  wire                          rd_en	,//I1,读使能
-	input  wire [$clog2(LINE_WIDTH)-1:0] rd_addr	,//Ix,读地址
-	output reg  [DATA_WIDTH-1:0]         rd_data_0	,//Ox,当前行读数据
-	output reg  [DATA_WIDTH-1:0]         rd_data_1	,//Ox,前一行读数据
-	output reg                           rd_valid	,//O1,读数据有效
+	input  wire                          rd_en    ,//I1,读使能
+	input  wire [$clog2(LINE_WIDTH)-1:0] rd_addr  ,//Ix,读地址
+	output reg  [DATA_WIDTH-1:0]         rd_data_0,//Ox,当前行读数据
+	output reg  [DATA_WIDTH-1:0]         rd_data_1,//Ox,前一行读数据
+	output reg                           rd_valid ,//O1,读数据有效
 
 	// 控制接口
-	input  wire                          swap	,//I1,行交换信号（高电平有效）
+	input  wire                          swap      //I1,行交换信号（高电平有效）
 );
 
 	//------------------------------------------------------------------------
@@ -55,8 +55,8 @@ module line_buffer #(
 	// 存储器定义
 	//------------------------------------------------------------------------
 	// 两行缓冲，使用标准 Verilog 数组
-	reg [DATA_WIDTH-1:0] line_buf_0 [0:LINE_WIDTH-1];         // 当前行
-	reg [DATA_WIDTH-1:0] line_buf_1 [0:LINE_WIDTH-1];         // 前一行
+	reg [DATA_WIDTH-1:0] line_buf_0 [0:LINE_WIDTH-1]          ;// 当前行
+	reg [DATA_WIDTH-1:0] line_buf_1 [0:LINE_WIDTH-1]          ;// 前一行
 
 	// 当前写入的行选择
 	reg                          wr_sel;
@@ -100,8 +100,8 @@ module line_buffer #(
 	end
 
 	// 读地址寄存（用于对齐读出数据）
-	reg [$clog2(LINE_WIDTH)-1:0] rd_addr_reg;
-	reg                          rd_en_reg;
+	reg [$clog2(LINE_WIDTH)-1:0] rd_addr_reg                  ;
+	reg                          rd_en_reg                    ;
 
 	always @(posedge clk) begin
 		rd_addr_reg <= #U_DLY rd_addr;
