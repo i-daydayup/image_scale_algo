@@ -1,0 +1,95 @@
+Magic 271485
+Revision 5.4v9
+
+; Window Layout <x> <y> <width> <height> <signalwidth> <valuewidth>
+viewPort 50 214 1359 749 100 65
+
+; File list:
+; openDirFile [-d delimiter] [-s time_offset] [-rf auto_bus_rule_file] path_name file_name
+openDirFile -d / "" "D:\Projects\image_scale_algo\rtl\sim\ut_bilinear_scaler\ut_bilinear_scaler_000.fsdb"
+
+; file time scale:
+; fileTimeScale ### s|ms|us|ns|ps
+
+; signal spacing:
+signalSpacing 3
+
+; windowTimeUnit is used for zoom, cursor & marker
+; waveform viewport range
+zoom 0.000000 0.100000
+cursor 0.000000
+marker 0.000000
+
+; user define markers
+; userMarker time_pos marker_name
+; visible top row signal index
+top 0
+; marker line index
+markerPos 19
+
+; event list
+; addEvent event_name event_expression
+; curEvent event_name
+
+
+
+COMPLEX_EVENT_BEGIN
+
+
+COMPLEX_EVENT_END
+
+
+
+; toolbar current search type
+; curSTATUS search_type
+curSTATUS ByChange
+
+
+addGroup "G1"
+activeDirFile "" "D:\Projects\image_scale_algo\rtl\sim\ut_bilinear_scaler\ut_bilinear_scaler_000.fsdb"
+addSignal -h 15 -UNSIGNED -HEX /ut_bilinear_scaler/dut/cfg_dst_height[15:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_dst_width[15:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_inv_scale_x[19:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_inv_scale_y[19:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_src_height[15:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_src_width[15:0]
+addSignal -h 15 -holdScope clk
+addSignal -h 15 -UNSIGNED -HEX -holdScope i_data[7:0]
+addSignal -h 15 -holdScope i_frame_start
+addSignal -h 15 -holdScope i_last
+addSignal -h 15 -holdScope i_valid
+addSignal -h 15 -holdScope o_ready
+addSignal -h 15 -holdScope rst_n
+addGroup "G2"
+addSignal -h 15 /ut_bilinear_scaler/dut/i_ready
+addSignal -h 15 -UNSIGNED -HEX -holdScope o_data[7:0]
+addSignal -h 15 -holdScope o_frame_start
+addSignal -h 15 -holdScope o_last
+addSignal -h 15 -holdScope o_valid
+addGroup "G3"
+
+; grid status
+; gridSignal signal_name
+; gridEdge 0 | 1
+; gridCount
+; gridCycleTime from to cycleTime
+
+; getSignalForm Scope Hierarchy Status
+; active file of getSignalForm
+activeDirFile "" "D:\Projects\image_scale_algo\rtl\sim\ut_bilinear_scaler\ut_bilinear_scaler_000.fsdb"
+
+GETSIGNALFORM_SCOPE_HIERARCHY_BEGIN
+getSignalForm close
+
+"/std"
+"/ut_bilinear_scaler"
+
+SCOPE_LIST_BEGIN
+"/std"
+"/ut_bilinear_scaler"
+"/ut_bilinear_scaler/dut"
+SCOPE_LIST_END
+
+GETSIGNALFORM_SCOPE_HIERARCHY_END
+
+

@@ -270,6 +270,9 @@ class BilinearFixed:
 		# 处理
 		output_array = self.process(input_img, debug=debug)
 
+		# 创建对比图
+		comparison = self._create_comparison(input_array, output_array)
+
 		# 生成输出文件名
 		base_name = os.path.splitext(os.path.basename(input_path))[0]
 
@@ -286,13 +289,73 @@ class BilinearFixed:
 		# 保存结果
 		os.makedirs(output_dir, exist_ok=True)
 
+		# 1. 仅放大后的图像
 		output_path = os.path.join(output_dir,
 			f"{base_name}_bilinear_fixed_{fixed_tag}_{size_tag}_{timestamp}.png")
 		Image.fromarray(output_array).save(output_path)
 		print(f"输出图像: {output_path}")
 
+		# 2. 对比图
+		comparison_path = os.path.join(output_dir,
+			f"{base_name}_bilinear_fixed_{fixed_tag}_{size_tag}_compare_{timestamp}.png")
+		comparison.save(comparison_path)
+		print(f"对比图像: {comparison_path}")
+
 		return output_path
 
+	def _create_comparison(self, src_img, dst_img, max_display_width=1920):
+		# 创建原图和结果图的对比可视化
+		#
+		# 如果结果图太大，会缩放到适合屏幕显示的大小
+
+		src_h, src_w = src_img.shape[:2]
+		dst_h, dst_w = dst_img.shape[:2]
+
+		# 计算显示缩放（如果结果图太宽）
+		total_width = src_w + dst_w
+		if total_width > max_display_width:
+			display_scale = max_display_width / total_width
+			display_src_w = int(src_w * display_scale)
+			display_src_h = int(src_h * display_scale)
+			display_dst_w = int(dst_w * display_scale)
+			display_dst_h = int(dst_h * display_scale)
+
+			# 使用 PIL 进行显示缩放（保持可视化清晰）
+			src_display = np.array(Image.fromarray(src_img).resize( (display_src_w, display_src_h), Image.NEAREST))
+			dst_display = np.array(Image.fromarray(dst_img).resize( (display_dst_w, display_dst_h), Image.NEAREST))
+		else:
+			src_display = src_img
+			dst_display = dst_img
+			display_src_h, display_src_w = src_h, src_w
+			display_dst_h, display_dst_w = dst_h, dst_w
+
+		# 创建对比画布
+		gap          = 20  # 中间间隔
+		label_height = 40  # 标签高度
+
+		canvas_height = max(display_src_h, display_dst_h) + label_height
+		canvas_width  = display_src_w + gap + display_dst_w
+
+		from PIL import ImageDraw, ImageFont
+		canvas = Image.new('RGB', (canvas_width, canvas_height), (40, 40, 40))
+		draw   = ImageDraw.Draw(canvas)
+
+		# 尝试使用默认字体
+		try:
+			font = ImageFont.truetype("arial.ttf", 20)
+		except:
+			font = ImageFont.load_default()
+
+		# 粘贴原图
+		canvas.paste(Image.fromarray(src_display), (0, label_height))
+		draw.text((10, 10), f"Original: {src_w}x{src_h}", fill=(255, 255, 255), font=font)
+
+		# 粘贴结果图
+		canvas.paste(Image.fromarray(dst_display), (display_src_w + gap, label_height))
+		draw.text((display_src_w + gap + 10, 10),
+			f"Bilinear (Fixed): {dst_w}x{dst_h}", fill=(255, 255, 255), font=font)
+
+		return canvas
 
 def compare_fixed_configs(input_path, target_size=None, scale_factor=None):
 	# 对比不同定点配置的差异
@@ -369,14 +432,16 @@ if __name__ == "__main__":
 	WEIGHT_BITS = 8   # 权重小数位（Q0.8）
 
 	# 缩放参数（二选一）
-	SCALE_FACTOR = 3.0   # 放大2倍
+	SCALE_FACTOR = 2.5   # 放大2倍
 	TARGET_SIZE  = None  # 或指定 (width, height)
 
 	# 输入图像
 	# INPUT_IMAGE = "test_images/test_pattern.png"
 	# INPUT_IMAGE = "test_images/侧脸纹理.png"
 	# INPUT_IMAGE = "test_images/文字球.png"
-	INPUT_IMAGE = "test_images/综合文字图形.png"
+	# INPUT_IMAGE = "test_images/综合文字图形.png"
+	# INPUT_IMAGE = "test_images/烤鸭美女眼耳发.png"
+	INPUT_IMAGE = "test_images/烤鸭美女眼.png"
 
 	print("=" * 50)
 	print("双线性插值 - 定点实现")

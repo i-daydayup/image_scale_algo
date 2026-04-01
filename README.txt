@@ -1,5 +1,5 @@
 # 20260401三
-完成双线性verilog代码，待仿真
+完成双线性verilog代码，完成仿真平台
 
 # 20260331二
 完成最近邻、双线性、双立方、Lanczos的浮点代码验证
@@ -26,8 +26,9 @@ D:\Projects\
     │
     ├── rtl\                       # Verilog 实现（以后放这里）
     │   ├── src\                   # RTL 源码
-    │   ├── sim\                   # 仿真脚本
-    │   └── tb\                    # Testbench
+    │   └── sim\                   # 仿真目录
+    │       ├── ut_xxxx            # 子模块仿真目录，包含仿真do脚本、Testbench
+    │       └── ut_yyyy            # 子模块仿真目录，包含仿真do脚本、Testbench
     │
     ├── test_images\               # 测试素材
     │   ├── 1080p\                 # 标准测试图

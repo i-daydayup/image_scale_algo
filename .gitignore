@@ -10,3 +10,14 @@ results/
 # Editor
 .vscode/
 *.swp
+
+# verilog仿真文件，临时文件
+**/work/
+*.mti
+*.fsdb
+*.chain
+*.lock
+*.slist
+*.tlist
+*.log
+*.hex

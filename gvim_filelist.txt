@@ -1,0 +1,24 @@
+使用gvim 快速连接的filelist文件
+
+./
+./AGENTS.md
+./README.txt
+./test_images/
+./results/
+
+./python/
+./python/reference/
+./python/testbench/
+./python/algorithms/
+./python/algorithms/bilinear_fixed.py
+./python/algorithms/bilinear_float.py
+./python/algorithms/bicubic_fixed.py
+./python/algorithms/bicubic_float.py
+./python/algorithms/bspline_fixed.py
+./python/algorithms/bspline_float.py
+./python/algorithms/lanczos_fixed.py
+./python/algorithms/lanczos_float.py
+./python/algorithms/nearest_fixed.py
+./python/algorithms/nearest_float.py
+
+./rtl/

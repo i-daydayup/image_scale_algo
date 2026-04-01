@@ -1,5 +1,5 @@
 //============================================================================
-// 测试平台    : tb_bilinear_scaler
+// 测试平台    : ut_bilinear_scaler
 // 功能描述    : bilinear_scaler 模块的仿真测试平台
 //
 // 测试内容：
@@ -9,13 +9,13 @@
 //
 // 使用方法：
 //   1. 使用 Python 生成测试向量和 golden 结果
-//   2. 运行仿真：vsim -c -do "run -all; quit" tb_bilinear_scaler
+//   2. 运行仿真：vsim -c -do "run -all; quit" ut_bilinear_scaler
 //   3. 对比输出结果
 //============================================================================
 
 `timescale 1ns / 1ps
 
-module tb_bilinear_scaler;
+module ut_bilinear_scaler;
 
 	//------------------------------------------------------------------------
 	// 仿真延时参数
@@ -109,8 +109,8 @@ module tb_bilinear_scaler;
 		clk = 0;
 		// forever #(CLK_PERIOD/2) clk = ~clk;
 		forever begin
-			#(CLK_PERIOD/2)					clk = 1'b1;
-			#(CLK_PERIOD - CLK_PERIOD/2)	clk = 1'b0;
+			#(CLK_PERIOD/2)               clk = 1'b1;
+			#(CLK_PERIOD - CLK_PERIOD/2)  clk = 1'b0;
 		end
 	end
 
@@ -121,15 +121,19 @@ module tb_bilinear_scaler;
 	integer out_file   ;
 	integer pixel_count;
 
-	initial begin
-		// 初始化
-		rst_n           = 0;
-		i_valid         = 0;
-		i_data          = 0;
-		i_last          = 0;
-		i_frame_start   = 0;
-		o_ready         = 1;
+	localparam EXPECTED_PIXELS = DST_WIDTH * DST_HEIGHT;
+	localparam OUTPUT_TIMEOUT  = EXPECTED_PIXELS * 1 + 1000;  // 1倍余量
 
+	initial begin
+		// 初始化信号
+		rst_n           = 1'b0;
+		i_valid         = 1'b0;
+		i_data          = 8'h00;
+		i_last          = 1'b0;
+		i_frame_start   = 1'b0;
+		o_ready         = 1'b1;
+
+		// 配置参数
 		cfg_inv_scale_x = INV_SCALE_X ;
 		cfg_inv_scale_y = INV_SCALE_Y ;
 		cfg_dst_width   = DST_WIDTH   ;
@@ -139,7 +143,7 @@ module tb_bilinear_scaler;
 
 		// 复位
 		#(CLK_PERIOD * 5);
-		rst_n = 1;
+		rst_n = 1'b1;
 		#(CLK_PERIOD * 2);
 
 		$display("============================================");
@@ -178,9 +182,11 @@ module tb_bilinear_scaler;
 
 		$display("输入数据发送完成，等待输出...");
 
+		//------------------------------------------------------------------------
 		// 等待输出完成
+		//------------------------------------------------------------------------
 		pixel_count = 0;
-		repeat (10000) begin
+		repeat (10000) begin : wait_output_block
 			@(posedge clk);
 			if (o_valid == 1'b1) begin
 				$fwrite(out_file, "%02x\n", o_data);
@@ -189,11 +195,10 @@ module tb_bilinear_scaler;
 				if (pixel_count % 1000 == 0)
 					$display("输出像素数: %0d / %0d", pixel_count, DST_WIDTH * DST_HEIGHT);
 
-				if (pixel_count >= DST_WIDTH * DST_HEIGHT)
-					disable wait_output;
+				if (pixel_count >= OUTPUT_TIMEOUT)
+					disable wait_output_block;
 			end
 		end
-		wait_output:;
 
 		$fclose(out_file);
 
@@ -204,7 +209,7 @@ module tb_bilinear_scaler;
 		$display("============================================");
 
 		#(CLK_PERIOD * 10);
-		$finish;
+		// $finish;
 	end
 
 	//------------------------------------------------------------------------
@@ -216,7 +221,7 @@ module tb_bilinear_scaler;
 	// end
 	//-----save the wave to debussy.
 	initial begin
-		$fsdbAutoSwitchDumpfile(1800,"ut_clk_lost.fsdb",5); //file size max is 1.8Gb, file number max is 5.
+		$fsdbAutoSwitchDumpfile(1800,"ut_bilinear_scaler.fsdb",5); //file size max is 1.8Gb, file number max is 5.
 		$fsdbDumpvars;
 		# 50_000_000; //50ms, because 1ns/1ps
 		$fsdbDumpflush;
@@ -228,7 +233,7 @@ module tb_bilinear_scaler;
 	initial begin
 		#(CLK_PERIOD * 50000);
 		$display("错误：仿真超时！");
-		$finish;
+		// $finish;
 	end
 
 endmodule

@@ -17,6 +17,7 @@
 ### 2.1 基础风格
 - **缩进**：Tab（1 Tab = 4 空格宽度）
 - **编码**：UTF-8，换行：Unix 风格 (LF)
+- **行宽**：最大 120 字符，超过则换行
 - **命名**：模块/函数/变量用 `snake_case`，类用 `PascalCase`，常量全大写
 
 ### 2.2 代码对齐规范
@@ -26,8 +27,8 @@
 # 正确：等号对齐
 self.scale_factor = scale_factor
 self.target_size  = target_size
-gap          = 20  # 中间间隔
-label_height = 40  # 标签高度
+gap               = 20  # 中间间隔
+label_height      = 40  # 标签高度
 ```
 
 ### 2.3 视频图像处理专用规范
@@ -60,7 +61,7 @@ class BilinearScaler:
     """双线性插值缩放算法的 Python 参考实现"""
     def __init__(self, scale_factor):
         self.scale_factor = scale_factor
-    
+
     def process(self, input_image):
         """处理单帧图像"""
         # 实现算法...
@@ -80,6 +81,7 @@ def save_test_vectors(filename, data):
 
 ### 3.1 基础风格
 - **缩进**：Tab（1 Tab = 4 空格），**命名**：`snake_case`，**编码**：UTF-8
+- **行宽**：最大 120 字符，超过则换行
 - **等号对齐**：相邻的多行赋值/声明语句，等号必须对齐（以**最长的左边**为基准）
 - **信号/参数对齐**：相邻的多行赋值/声明/参数定义语句，左边（类型/关键字）必须对齐，等号/分号必须对齐（以**最长的左边**为基准，右边不足用空格补齐）
 
@@ -115,10 +117,9 @@ output reg                           rd_valid   //O1,读数据有效
 //============================================================================
 // 模块名称    : image_scaler
 // 功能描述    : 图像双线性插值缩放模块
-// 作者        : 
-// 版本历史    : v1.0 - 初始版本
 // 对应Python  : python/image_scaler.py
-// 验证状态    : ⏳ 验证中
+// 作者        : Nico.Wei
+// 版本历史    : v1.0 - 初始版本
 //============================================================================
 
 `timescale 1ns / 1ps
@@ -137,7 +138,7 @@ module image_scaler #(
 );
     // 仿真延时参数（放在 module 内最前面）
     localparam U_DLY = 1;
-    
+
     // 模块实现...
 endmodule
 ```
@@ -169,6 +170,11 @@ module example (
     reg [7:0]  pixel_reg[0:3]  ;
     reg [15:0] accumulator     ;
 
+    // 整数变量（Testbench 中常用）
+    integer row, col   ;
+    integer out_file   ;
+    integer pixel_count;
+
     //------------------------------------------------------------------------
     // 组合逻辑
     //------------------------------------------------------------------------
@@ -197,6 +203,32 @@ module example (
     end
 endmodule
 ```
+
+#### 块内多行赋值对齐规范
+
+`initial` 块和 `always` 块内的**相邻多行赋值语句**，等号必须对齐：
+
+```verilog
+initial begin
+    // 初始化 - 等号对齐
+    rst_n           = 0;
+    i_valid         = 0;
+    i_data          = 0;
+    i_last          = 0;
+    i_frame_start   = 0;
+    o_ready         = 1;
+
+    cfg_inv_scale_x = INV_SCALE_X ;
+    cfg_inv_scale_y = INV_SCALE_Y ;
+    cfg_dst_width   = DST_WIDTH   ;
+    cfg_dst_height  = DST_HEIGHT  ;
+end
+```
+
+**对齐规则**：
+- 相邻的多行赋值语句，等号必须对齐
+- 赋值语句结尾的分号也对齐
+- 以**最长的左边**为基准，右边不足用空格补齐
 
 #### always 块编码规范
 
@@ -249,15 +281,15 @@ module line_buffer #(
     output reg                           rd_valid //O1,
 );
     localparam U_DLY = 1;
-    
+
     reg [DATA_WIDTH-1:0]         mem [0:LINE_WIDTH-1]  ;
     reg [$clog2(LINE_WIDTH)-1:0] wr_addr               ;
-    
+
     always @(posedge clk) begin
         if (wr_en == 1'b1)
             mem[wr_addr] <= #U_DLY wr_data;
     end
-    
+
     always @(posedge clk) begin
         rd_data <= #U_DLY mem[rd_addr];
     end
