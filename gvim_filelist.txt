@@ -22,3 +22,6 @@
 ./python/algorithms/nearest_float.py
 
 ./rtl/
+./rtl/README.md
+./rtl/sim/
+./rtl/src/

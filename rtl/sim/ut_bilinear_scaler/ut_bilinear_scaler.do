@@ -1,5 +1,5 @@
 # #############################################################################
-	# ModelSim/QuestaSim 使用UTF-8编码，解决打印信息是中文乱码的问题
+	# 设置 ModelSim/QuestaSim 使用UTF-8编码，解决打印信息是中文乱码的问题
 	encoding system utf-8
 
 	if {[file exists work]} {

@@ -160,37 +160,42 @@ module ut_bilinear_scaler;
 	end
 
 	always begin: send_frame_block
-		// 发送帧开始
-		@(posedge clk);
+		// 等待复位完成
+		@(posedge clk) #U_DLY;
+		while (rst_n == 1'b0) @(posedge clk) #U_DLY;
+
+		// 发送帧开始 (AXI-S握手: valid拉高后等待i_ready)
 		i_frame_start = 1'b1;
 		i_valid       = 1'b1;
 		i_data        = 8'hf5;
+		// 等待握手完成 (valid && ready)
+		@(posedge clk) #U_DLY;
+		while (i_ready == 1'b0) @(posedge clk) #U_DLY;
 
 		// 发送测试图像数据 (水平渐变)
 		for (row = 0; row < SRC_HEIGHT; row = row + 1) begin
 			for (col = 0; col < SRC_WIDTH; col = col + 1) begin
-				@(posedge clk);
 				i_frame_start = 1'b0;
 				i_valid       = 1'b1;
 				i_data        = col;  // 水平渐变：0 ~ 99
 				i_last        = (col == SRC_WIDTH - 1);
-
-				// // 每10行显示一次进度。直接看波形，就不打印了。
-				// if (col == 0 && row % 10 == 0)
-				// 	$display("发送行 %0d / %0d", row, SRC_HEIGHT);
+				// AXI-S握手：等待slave准备好 (valid && ready)
+				@(posedge clk) #U_DLY;
+				while (i_ready == 1'b0) @(posedge clk) #U_DLY;
 			end
-			@(posedge clk);
-			i_valid		= 1'b0;
-			i_last		= 1'b0;
-			repeat(50) @(posedge clk);
+			// 行间隙：释放valid
+			i_valid = 1'b0;
+			i_last  = 1'b0;
+			repeat(50) @(posedge clk) #U_DLY;
 		end
 
-		@(posedge clk);
-		i_valid 		= 1'b0;
-		i_last  		= 1'b0;
-		i_frame_start	= 1'b0;
-		repeat(200) @(posedge clk);
-		//一帧发送结束，循环发送下一帧
+		// 帧结束
+		i_valid       = 1'b0;
+		i_last        = 1'b0;
+		i_frame_start = 1'b0;
+		repeat(200) @(posedge clk) #U_DLY;
+
+		// 一帧发送结束，循环发送下一帧
 		frame_cnt = frame_cnt + 1'b1;
 	end
 
