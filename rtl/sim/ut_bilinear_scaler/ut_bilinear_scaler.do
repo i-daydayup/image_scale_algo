@@ -20,4 +20,4 @@
 	vsim -t ps -novopt +notimingchecks \
 		work.ut_bilinear_scaler -pli novas.dll
 
-	run 5ms
+	run 2ms

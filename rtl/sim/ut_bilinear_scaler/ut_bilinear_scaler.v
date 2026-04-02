@@ -173,11 +173,13 @@ module ut_bilinear_scaler;
 		while (i_ready == 1'b0) @(posedge clk) #U_DLY;
 
 		// 发送测试图像数据 (水平渐变)
+		// 第0行：帧开始已发8'hf5(第0像素)，这里从第1个像素开始
+		// 第1~N-1行：从第0个像素开始发送
 		for (row = 0; row < SRC_HEIGHT; row = row + 1) begin
-			for (col = 0; col < SRC_WIDTH; col = col + 1) begin
+			for (col = (row == 0) ? 1 : 0; col < SRC_WIDTH; col = col + 1) begin
 				i_frame_start = 1'b0;
 				i_valid       = 1'b1;
-				i_data        = col;  // 水平渐变：0 ~ 99
+				i_data        = col;  // 水平渐变
 				i_last        = (col == SRC_WIDTH - 1);
 				// AXI-S握手：等待slave准备好 (valid && ready)
 				@(posedge clk) #U_DLY;
