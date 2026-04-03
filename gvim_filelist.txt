@@ -24,4 +24,15 @@
 ./rtl/
 ./rtl/README.md
 ./rtl/sim/
+./rtl/sim/ut_bilinear_scaler/
+./rtl/sim/ut_bilinear_scaler/ut_bilinear_scaler.do
+./rtl/sim/ut_bilinear_scaler/ut_bilinear_scaler.rc
+./rtl/sim/ut_bilinear_scaler/ut_bilinear_scaler.v
+
 ./rtl/src/
+./rtl/src/bilinear_scaler.v
+./rtl/src/bilinear_scaler_vh.v
+./rtl/src/bilinear_coord_calc.v
+./rtl/src/bilinear_interp.v
+./rtl/src/line_buffer.v
+

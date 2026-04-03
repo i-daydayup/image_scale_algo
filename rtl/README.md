@@ -8,21 +8,21 @@
 rtl/
 ├── README.md                          # 本文件
 ├── src/                               # RTL 源码
-│   ├── bilinear_scaler.v              # 顶层缩放模块（待重构）
-│   ├── bilinear_coord_calc.v          # 坐标计算模块
-│   ├── bilinear_interp.v              # 插值计算模块
-│   ├── line_buffer.v                  # 行缓冲模块
-│   ├── bilinear_scaler_arch.md        # 架构设计文档（V2双时钟域方案）
-│   └── filelist.f                     # 仿真文件列表
+│   ├── bilinear_scaler_vh.v           # V+H架构顶层模块（双线性）
+│   ├── line_buffer_2row_wrapper.v     # L1输入缓冲：2行ping-pong
+│   ├── bilinear_coord_calc.v          # 坐标计算模块（可复用）
+│   ├── bilinear_interp.v              # 插值计算模块（可复用）
+│   ├── bilinear_scaler_arch.md        # 架构设计文档
+│   ├── filelist.f                     # 仿真文件列表
+│   └── common/                        # 器件特定代码（Vendor Specific）
+│       └── （预留，用于Xilinx/Lattice特定实现）
 ├── sim/                               # 仿真测试
 │   └── ut_bilinear_scaler/            # 单元测试平台
-│       ├── ut_bilinear_scaler.v       # Testbench（AXI-S流式激励）
-│       ├── ut_bilinear_scaler.do      # ModelSim/QuestaSim 仿真脚本
-│       ├── ut_bilinear_scaler.mpf     # ModelSim 项目文件
-│       └── work/                      # 仿真编译目录（自动创建）
+│       ├── ut_bilinear_scaler.v       # Testbench
+│       ├── ut_bilinear_scaler.do      # ModelSim仿真脚本
+│       └── work/                      # 仿真编译目录
 └── ref/                               # 参考文档
-    ├── pg231-v-proc-ss-20240221.pdf   # Xilinx Video Processing Subsystem (v2.4)
-    └── pg231-v-proc-ss-20220427.pdf   # 旧版本参考
+    └── pg231-v-proc-ss-20240221.pdf   # Xilinx Video Processing Subsystem
 ```
 
 ## 设计状态

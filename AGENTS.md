@@ -143,7 +143,39 @@ module image_scaler #(
 endmodule
 ```
 
-### 3.3 代码结构规范
+### 3.3 模块实例化对齐规范
+
+模块实例化时，参数和端口的括号必须对齐：
+
+```verilog
+// 参数实例化：左括号对齐，右括号对齐（不足用Tab补齐）
+line_buffer_2row_wrapper #(
+	.DATA_WIDTH(DATA_WIDTH	),
+	.MAX_WIDTH (MAX_WIDTH 	),
+	.VENDOR    ("GENERIC"	)
+) u_l1_buffer (
+	.clk           (clk_in           ),//I1,
+	.rst_n         (rst_n_in         ),//I1,
+	.wr_valid      (i_valid          ),//I1,
+	.wr_addr       (l1_wr_addr_cnt   ),//Ix,
+	.wr_data       (i_data           ),//Ix,
+	.wr_ready      (i_ready          ) //O1,
+);
+
+// 对齐规则：
+// 1. 参数名后的左括号对齐
+// 2. 参数值后的右括号对齐（不足用Tab补齐）
+// 3. 端口连接的括号同理
+// 4. 最后一行无逗号，用空格占位使 // 对齐
+```
+
+**对齐规则详解**：
+1. **左括号对齐**：所有参数的左括号必须在同一列
+2. **右括号对齐**：所有参数的右括号必须在同一列（不足用Tab补齐）
+3. **端口连接**：`.*(` 或 `.port_name(` 的左括号对齐
+4. **逗号处理**：最后一行无逗号时，用空格占位使 `//` 对齐
+
+### 3.4 代码结构规范
 
 ```verilog
 module example (
@@ -245,7 +277,7 @@ end
 - **禁止**逻辑非：`if (!valid)` → `if (valid == 1'b0)`
 - 组合逻辑中的条件同样遵循此规则：`if (state == IDLE && valid == 1'b1)`
 
-### 3.4 视频接口规范
+### 3.5 视频接口规范
 
 #### AXI-Stream 风格接口
 
@@ -296,7 +328,7 @@ module line_buffer #(
 endmodule
 ```
 
-### 3.5 定点数运算规范
+### 3.6 定点数运算规范
 
 ```verilog
 // Qm.n 格式：m位整数，n位小数

@@ -74,32 +74,79 @@ module ut_bilinear_scaler;
 	//------------------------------------------------------------------------
 	// DUT 实例化
 	//------------------------------------------------------------------------
-	bilinear_scaler #(
+//	bilinear_scaler #(
+//		.DATA_WIDTH  (DATA_WIDTH  ),//8,
+//		.INT_BITS    (INT_BITS    ),//12,
+//		.FRAC_BITS   (FRAC_BITS   ),//8,
+//		.WEIGHT_BITS (WEIGHT_BITS ),//8,
+//		.MAX_WIDTH   (1024        ),//10,
+//		.MAX_HEIGHT  (1024        ) //10
+//	) dut (
+//		.clk             (clk              ),//I1,
+//		.rst_n           (rst_n            ),//I1,
+//		.cfg_inv_scale_x (cfg_inv_scale_x  ),//I20,
+//		.cfg_inv_scale_y (cfg_inv_scale_y  ),//I20,
+//		.cfg_dst_width   (cfg_dst_width    ),//I16,
+//		.cfg_dst_height  (cfg_dst_height   ),//I16,
+//		.cfg_src_width   (cfg_src_width    ),//I16,
+//		.cfg_src_height  (cfg_src_height   ),//I16,
+//		.i_valid         (i_valid          ),//I1,
+//		.i_data          (i_data           ),//I8,
+//		.i_last          (i_last           ),//I1, 注意，仅1拍有效
+//		.i_frame_start   (i_frame_start    ),//I1, 注意，仅1拍有效
+//		.i_ready         (i_ready          ),//O1,
+//		.o_valid         (o_valid          ),//O1,
+//		.o_data          (o_data           ),//O8,
+//		.o_last          (o_last           ),//O1,
+//		.o_frame_start   (o_frame_start    ),//O1,
+//		.o_ready         (o_ready          ) //I1
+//	);
+
+
+	bilinear_scaler_vh #(
 		.DATA_WIDTH  (DATA_WIDTH  ),//8,
 		.INT_BITS    (INT_BITS    ),//12,
 		.FRAC_BITS   (FRAC_BITS   ),//8,
-		.WEIGHT_BITS (WEIGHT_BITS ),//8,
+		// .WEIGHT_BITS (WEIGHT_BITS ),//8,
 		.MAX_WIDTH   (1024        ),//10,
-		.MAX_HEIGHT  (1024        ) //10
+		.MAX_HEIGHT  (1024        ),//10
+		.ADDR_WIDTH  ($clog2(1024))
 	) dut (
-		.clk             (clk              ),//I1,
-		.rst_n           (rst_n            ),//I1,
-		.cfg_inv_scale_x (cfg_inv_scale_x  ),//I20,
-		.cfg_inv_scale_y (cfg_inv_scale_y  ),//I20,
-		.cfg_dst_width   (cfg_dst_width    ),//I16,
-		.cfg_dst_height  (cfg_dst_height   ),//I16,
-		.cfg_src_width   (cfg_src_width    ),//I16,
-		.cfg_src_height  (cfg_src_height   ),//I16,
-		.i_valid         (i_valid          ),//I1,
-		.i_data          (i_data           ),//I8,
-		.i_last          (i_last           ),//I1, 注意，仅1拍有效
-		.i_frame_start   (i_frame_start    ),//I1, 注意，仅1拍有效
-		.i_ready         (i_ready          ),//O1,
-		.o_valid         (o_valid          ),//O1,
-		.o_data          (o_data           ),//O8,
-		.o_last          (o_last           ),//O1,
-		.o_frame_start   (o_frame_start    ),//O1,
-		.o_ready         (o_ready          ) //I1
+		//------------------------------------------------------------------------
+		// 输入时钟域 (源图像/DDR)
+		//------------------------------------------------------------------------
+		.clk_in			(clk              ),//I1,输入时钟
+		.rst_n_in 		(rst_n            ),//I1,输入复位
+		//------------------------------------------------------------------------
+		// 配置接口 (clk_in域，在i_frame_start前配置有效)
+		//------------------------------------------------------------------------
+		.cfg_inv_scale_x (cfg_inv_scale_x  ),//I20,X方向逆缩放比例
+		.cfg_inv_scale_y (cfg_inv_scale_y  ),//I20,Y方向逆缩放比例
+		.cfg_dst_width   (cfg_dst_width    ),//I16,目标图像宽度
+		.cfg_dst_height  (cfg_dst_height   ),//I16,目标图像高度
+		.cfg_src_width   (cfg_src_width    ),//I16,源图像宽度
+		.cfg_src_height  (cfg_src_height   ),//I16,源图像高度
+		//------------------------------------------------------------------------
+		// 输入视频流 (AXI-S风格, clk_in域)
+		//------------------------------------------------------------------------
+		.i_valid         (i_valid          	),//I1,输入数据有效
+		.i_data          (i_data           	),//I8,输入像素数据
+		.i_last          (i_last           	),//I1, 注意，仅1拍有效, 行结束标记
+		.i_frame_start   (i_frame_start    	),//I1, 注意，仅1拍有效, 帧开始标记
+		.i_ready         (i_ready          	),//O1, 模块就绪
+		//------------------------------------------------------------------------
+		// 输出时钟域 (显示接口)
+		//------------------------------------------------------------------------
+		.clk_out       	(clk				),//I1,输出时钟
+		.rst_n_out     	(rst_n				),//I1,输出复位
+		//------------------------------------------------------------------------
+		// 输出视频流 (AXI-S风格, clk_out域)
+		//------------------------------------------------------------------------
+		.o_valid         (o_valid          ),//O1,输出数据有效
+		.o_data          (o_data           ),//O8,输出像素数据
+		.o_last          (o_last           ),//O1,行结束标记
+		.o_frame_start   (o_frame_start    ),//O1,帧开始标记
+		.o_ready         (o_ready          ) //I1 下游就绪
 	);
 
 	//------------------------------------------------------------------------
