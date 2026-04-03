@@ -18,7 +18,7 @@ set P_DIR "D:/Projects/image_scale_algo/rtl"
 # 编译RTL模块
 # bilinear_scaler_vh.v 例化的子模块需要单独编译
 vlog -sv	$P_DIR/src/bilinear_scaler_vh.v			\
-			$P_DIR/src/line_buffer_2row_wrapper.v	\
+			$P_DIR/src/line_buffer_wrapper.v		\
 			$P_DIR/src/bilinear_coord_calc.v		\
 			$P_DIR/sim/ut_bilinear_scaler/ut_bilinear_scaler.v
 

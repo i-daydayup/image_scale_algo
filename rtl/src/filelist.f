@@ -4,7 +4,7 @@
 //   2. 或使用命令：vlog -f filelist.f
 
 // 通用模块
-rtl/src/line_buffer_2row_wrapper.v     // L1输入缓冲：2行ping-pong，时序收敛
+rtl/src/line_buffer_wrapper.v          // 单行双口RAM wrapper（例化多个实现多行缓冲）
 
 // V+H架构新模块
 rtl/src/bilinear_scaler_vh.v           // V+H架构顶层模块（开发中）

@@ -131,56 +131,100 @@ module bilinear_scaler_vh #(
 
 	//------------------------------------------------------------------------
 	//========================================================================
-	// 第2部分：L1 输入缓冲（2行Wrapper实例化，clk_in域）
+	// 第2部分：L1 输入缓冲（2行Wrapper，上层实现ping-pong）
 	//========================================================================
-	reg  [ADDR_WIDTH-1:0] l1_rd_addr       ;// 到L1的读地址
-	wire [DATA_WIDTH-1:0] l1_rd_data       ;// 从L1读出的数据
-	wire                  l1_rd_data_valid ;// L1读数据有效
-	reg                   l1_rd_switch     ;// L1 buffer切换
-	wire [1:0]            l1_buf_status    ;// L1 buffer状态
-
-	// L1 写地址计数器
-	reg [ADDR_WIDTH-1:0] l1_wr_addr_cnt ;
-
-	// L2 读请求（到L1）
-	reg                  l2_rd_req ;
-
-	line_buffer_2row_wrapper #(
+	// 实例化2个单行buffer，上层控制切换
+	
+	// L1 写控制（clk_in域）
+	reg [ADDR_WIDTH-1:0] l1_wr_addr_cnt ;// 写地址计数
+	reg                  l1_wr_buf_sel  ;// 写buffer选择(0/1)
+	reg                  l1_wr_buf0_full;// buffer0写满
+	reg                  l1_wr_buf1_full;// buffer1写满
+	
+	// L1 读控制（clk_out域）
+	reg  [ADDR_WIDTH-1:0] l1_rd_addr       ;// 读地址
+	reg                   l1_rd_buf_sel    ;// 读buffer选择(0/1)
+	reg                   l1_rd_switch     ;// 读buffer切换脉冲
+	wire [1:0]            l1_buf_status    ;// buffer状态 {buf1_full, buf0_full}
+	wire [DATA_WIDTH-1:0] l1_rd_data_0     ;// buffer0读数据
+	wire [DATA_WIDTH-1:0] l1_rd_data_1     ;// buffer1读数据
+	wire                  l1_rd_data_0_valid;// buffer0读有效
+	wire                  l1_rd_data_1_valid;// buffer1读有效
+	reg  [DATA_WIDTH-1:0] l1_rd_data       ;// 选择后的读数据
+	reg                   l1_rd_data_valid ;// 选择后的读有效
+	
+	// L1 buffer写使能（提前生成，不写在接口上）
+	wire l1_buf0_wr_en;
+	wire l1_buf1_wr_en;
+	
+	assign l1_buf0_wr_en = i_valid & i_ready & ~l1_wr_buf_sel;
+	assign l1_buf1_wr_en = i_valid & i_ready & l1_wr_buf_sel;
+	assign l1_buf_status = {l1_wr_buf1_full, l1_wr_buf0_full};
+	
+	// L1 wrapper实例0
+	line_buffer_wrapper #(
+		.DATA_WIDTH(DATA_WIDTH ),
+		.MAX_WIDTH (MAX_WIDTH  ),
+		.VENDOR    ("GENERIC"  )
+	) u_l1_buf0 (
+		.clk           (clk_in                ),//I1,
+		.rst_n         (rst_n_in              ),//I1,
+		.wr_en         (l1_buf0_wr_en         ),//I1,
+		.wr_addr       (l1_wr_addr_cnt        ),//Ix,
+		.wr_data       (i_data                ),//Ix,
+		.wr_full       (                      ),//O1,
+		.rd_en         (/* TODO */            ),//I1,
+		.rd_addr       (l1_rd_addr            ),//Ix,
+		.rd_data       (l1_rd_data_0          ),//Ox,
+		.rd_data_valid (l1_rd_data_0_valid    ) //O1,
+	);
+	
+	// L1 wrapper实例1
+	line_buffer_wrapper #(
 		.DATA_WIDTH(DATA_WIDTH	),
 		.MAX_WIDTH (MAX_WIDTH 	),
 		.VENDOR    ("GENERIC"	)
-	) u_l1_buffer (
-		.clk           (clk_in           ),//I1,
-		.rst_n         (rst_n_in         ),//I1,
-		.wr_valid      (i_valid          ),//I1,
-		.wr_addr       (l1_wr_addr_cnt   ),//Ix,
-		.wr_data       (i_data           ),//Ix,
-		.wr_last       (i_last           ),//I1,
-		.wr_ready      (i_ready          ),//O1,
-		.rd_valid      (l2_rd_req        ),//I1,
-		.rd_addr       (l1_rd_addr       ),//Ix,
-		.rd_data       (l1_rd_data       ),//Ox,
-		.rd_data_valid (l1_rd_data_valid ),//O1,
-		.rd_switch     (l1_rd_switch     ),//I1,
-		.buf_status    (l1_buf_status    ) //O2,
+	) u_l1_buf1 (
+		.clk           (clk_in                ),//I1,
+		.rst_n         (rst_n_in              ),//I1,
+		.wr_en         (l1_buf1_wr_en         ),//I1,
+		.wr_addr       (l1_wr_addr_cnt        ),//Ix,
+		.wr_data       (i_data                ),//Ix,
+		.wr_full       (                      ),//O1,
+		.rd_en         (/* TODO */            ),//I1,
+		.rd_addr       (l1_rd_addr            ),//Ix,
+		.rd_data       (l1_rd_data_1          ),//Ox,
+		.rd_data_valid (l1_rd_data_1_valid    ) //O1,
 	);
-
+	
 	//------------------------------------------------------------------------
-	// L1 写地址计数器
+	// L1 写控制（ping-pong切换）
 	//------------------------------------------------------------------------
 	always @(posedge clk_in or negedge rst_n_in) begin
 		if (rst_n_in == 1'b0) begin
-			l1_wr_addr_cnt <= {ADDR_WIDTH{1'b0}};
+			l1_wr_addr_cnt  <= {ADDR_WIDTH{1'b0}};
+			l1_wr_buf_sel   <= 1'b0;
+			l1_wr_buf0_full <= 1'b0;
+			l1_wr_buf1_full <= 1'b0;
 		end
 		else if (i_valid == 1'b1 && i_ready == 1'b1) begin
-			if (i_last == 1'b1) begin
-				l1_wr_addr_cnt <= {ADDR_WIDTH{1'b0}};
+			if (i_last == 1'b1 || l1_wr_addr_cnt >= MAX_WIDTH-1) begin
+				// 行结束，切换buffer
+				l1_wr_addr_cnt <= #U_DLY {ADDR_WIDTH{1'b0}};
+				l1_wr_buf_sel  <= #U_DLY ~l1_wr_buf_sel;
+				if (l1_wr_buf_sel == 1'b0)
+					l1_wr_buf0_full <= #U_DLY 1'b1;
+				else
+					l1_wr_buf1_full <= #U_DLY 1'b1;
 			end
 			else begin
 				l1_wr_addr_cnt <= #U_DLY l1_wr_addr_cnt + 1'b1;
 			end
 		end
 	end
+	
+	// i_ready控制：当两个buffer都满时反压
+	assign i_ready = ~(l1_wr_buf0_full & l1_wr_buf1_full);
 
 	//------------------------------------------------------------------------
 	//========================================================================
@@ -190,16 +234,17 @@ module bilinear_scaler_vh #(
 	reg [DATA_WIDTH-1:0] l2_v_buf [0:3][0:MAX_WIDTH-1];
 
 	// L2 buffer状态
-	reg [1:0]  l2_wr_buf_id      ;// 当前写入的buffer
-	reg [1:0]  l2_rd_buf_id [0:3];// 当前使用的4个buffer（动态变化）
-	reg        l2_buf_valid [0:3];// buffer有效标志
-	reg [15:0] l2_buf_line_id [0:3];// buffer存储的源行号
+	reg [1:0]  l2_wr_buf_id       ;// 当前写入的buffer
+	reg [1:0]  l2_rd_buf_id [0:3] ;// 当前使用的4个buffer（动态变化）
+	reg        l2_buf_valid [0:3] ;// buffer有效标志
+	reg [15:0] l2_buf_line_id[0:3];// buffer存储的源行号
+	reg        l2_rd_req          ;// L1读请求
 
 	// L2状态定义
 	localparam L2_EMPTY   = 2'b00 ;
 	localparam L2_FILLING = 2'b01 ;
 	localparam L2_VALID   = 2'b10 ;
-	reg [1:0]  l2_state           ;
+	reg [1:0]              l2_state;
 
 	//------------------------------------------------------------------------
 	// L1 到 L2 数据传输状态机（双线性简化版）
@@ -211,9 +256,9 @@ module bilinear_scaler_vh #(
 	localparam TRANS_WRITE = 3'b011;
 	localparam TRANS_NEXT  = 3'b100;
 
-	reg [2:0]  trans_state        ;
-	reg [ADDR_WIDTH-1:0] trans_addr_cnt;
-	reg [1:0]  l2_fill_cnt        ;  // 已填充的L2 buffer数
+	reg [2:0]              trans_state ;
+	reg [ADDR_WIDTH-1:0]   trans_addr_cnt;
+	reg [1:0]              l2_fill_cnt ;  // 已填充的L2 buffer数
 
 	// 状态机：将数据从L1搬到L2
 	always @(posedge clk_out or negedge rst_n_out) begin
@@ -231,29 +276,29 @@ module bilinear_scaler_vh #(
 			l2_buf_valid[3] <= 1'b0;
 		end
 		else begin
-			l1_rd_switch <= 1'b0;
+			l1_rd_switch <= #U_DLY 1'b0;
 
 			case (trans_state)
 				TRANS_IDLE: begin
 					if (frame_start_pulse == 1'b1) begin
-						trans_state <= TRANS_WAIT;
-						l2_fill_cnt <= 2'd0;
+						trans_state <= #U_DLY TRANS_WAIT;
+						l2_fill_cnt <= #U_DLY 2'd0;
 					end
 				end
 
 				TRANS_WAIT: begin
 					// 等待L1有数据
 					if (l1_buf_status != 2'b00) begin
-						trans_state    <= TRANS_READ;
-						trans_addr_cnt <= {ADDR_WIDTH{1'b0}};
-						l2_rd_req      <= 1'b1;
+						trans_state    <= #U_DLY TRANS_READ;
+						trans_addr_cnt <= #U_DLY {ADDR_WIDTH{1'b0}};
+						l2_rd_req      <= #U_DLY 1'b1;
 					end
 				end
 
 				TRANS_READ: begin
 					if (trans_addr_cnt >= r_src_width - 1) begin
-						trans_state    <= TRANS_WRITE;
-						trans_addr_cnt <= {ADDR_WIDTH{1'b0}};
+						trans_state    <= #U_DLY TRANS_WRITE;
+						trans_addr_cnt <= #U_DLY {ADDR_WIDTH{1'b0}};
 					end
 					else begin
 						trans_addr_cnt <= #U_DLY trans_addr_cnt + 1'b1;
@@ -266,7 +311,7 @@ module bilinear_scaler_vh #(
 						l2_v_buf[l2_wr_buf_id][trans_addr_cnt] <= #U_DLY l1_rd_data;
 
 						if (trans_addr_cnt >= r_src_width - 1) begin
-							trans_state <= TRANS_NEXT;
+							trans_state <= #U_DLY TRANS_NEXT;
 						end
 						else begin
 							trans_addr_cnt <= #U_DLY trans_addr_cnt + 1'b1;
@@ -280,13 +325,13 @@ module bilinear_scaler_vh #(
 
 					l2_wr_buf_id <= #U_DLY l2_wr_buf_id + 1'b1;
 					l2_fill_cnt  <= #U_DLY l2_fill_cnt + 1'b1;
-					l1_rd_switch <= 1'b1;
+					l1_rd_switch <= #U_DLY 1'b1;
 
 					// 双线性：2行就绪即可开始，继续填充更多行
-					trans_state <= TRANS_WAIT;
+					trans_state <= #U_DLY TRANS_WAIT;
 				end
 
-				default: trans_state <= TRANS_IDLE;
+				default: trans_state <= #U_DLY TRANS_IDLE;
 			endcase
 		end
 	end
@@ -295,17 +340,19 @@ module bilinear_scaler_vh #(
 	//========================================================================
 	// 第4部分：目标坐标生成 + 源坐标计算（clk_out域）
 	//========================================================================
-	reg [15:0] dst_y_cnt     ;
-	reg [15:0] dst_x_cnt     ;
-	reg        output_active ;
+	reg [15:0] dst_y_cnt    ;
+	reg [15:0] dst_x_cnt    ;
+	reg        output_active;
 
 	// 源坐标（定点数）
-	wire [COORD_BITS-1:0] coord_y      ;
-	wire [INT_BITS-1:0]   coord_y_int  ;
-	wire [FRAC_BITS-1:0]  coord_y_frac ;
-	wire [COORD_BITS-1:0] coord_x      ;
-	wire [INT_BITS-1:0]   coord_x_int  ;
-	wire [FRAC_BITS-1:0]  coord_x_frac ;
+	wire [COORD_BITS-1:0] coord_y     ;
+	wire [INT_BITS-1:0]   coord_y_int ;
+	wire [FRAC_BITS-1:0]  coord_y_frac;
+	wire                  coord_y_valid;
+	wire [COORD_BITS-1:0] coord_x     ;
+	wire [INT_BITS-1:0]   coord_x_int ;
+	wire [FRAC_BITS-1:0]  coord_x_frac;
+	wire                  coord_x_valid;
 
 	// 坐标计算实例化（复用现有模块）
 	bilinear_coord_calc #(
@@ -313,14 +360,14 @@ module bilinear_scaler_vh #(
 		.FRAC_BITS(FRAC_BITS),
 		.WEIGHT_BITS(FRAC_BITS)
 	) u_coord_y (
-		.clk          (clk_out        ),
-		.rst_n        (rst_n_out      ),
-		.dst_idx      (dst_y_cnt      ),
-		.inv_scale    (r_inv_scale_y  ),
-		.src_size     (r_src_height   ),
-		.src_pos_int  (coord_y_int    ),
-		.src_pos_frac (coord_y_frac   ),
-		.valid        (coord_y_valid  )
+		.clk          (clk_out        ),//I1,
+		.rst_n        (rst_n_out      ),//I1,
+		.dst_idx      (dst_y_cnt      ),//I16,
+		.inv_scale    (r_inv_scale_y  ),//Ix,
+		.src_size     (r_src_height   ),//I16,
+		.src_pos_int  (coord_y_int    ),//O16,
+		.src_pos_frac (coord_y_frac   ),//Ox,
+		.valid        (coord_y_valid  ) //O1,
 	);
 
 	bilinear_coord_calc #(
@@ -328,14 +375,14 @@ module bilinear_scaler_vh #(
 		.FRAC_BITS(FRAC_BITS),
 		.WEIGHT_BITS(FRAC_BITS)
 	) u_coord_x (
-		.clk          (clk_out        ),
-		.rst_n        (rst_n_out      ),
-		.dst_idx      (dst_x_cnt      ),
-		.inv_scale    (r_inv_scale_x  ),
-		.src_size     (r_src_width    ),
-		.src_pos_int  (coord_x_int    ),
-		.src_pos_frac (coord_x_frac   ),
-		.valid        (coord_x_valid  )
+		.clk          (clk_out        ),//I1,
+		.rst_n        (rst_n_out      ),//I1,
+		.dst_idx      (dst_x_cnt      ),//I16,
+		.inv_scale    (r_inv_scale_x  ),//Ix,
+		.src_size     (r_src_width    ),//I16,
+		.src_pos_int  (coord_x_int    ),//O16,
+		.src_pos_frac (coord_x_frac   ),//Ox,
+		.valid        (coord_x_valid  ) //O1,
 	);
 
 	// 输出控制
@@ -376,14 +423,16 @@ module bilinear_scaler_vh #(
 	// 第5部分：V-filter（双线性垂直插值）
 	//========================================================================
 	// 读取L2的两行（y0和y1），根据coord_y_frac做插值
-	reg [DATA_WIDTH-1:0] v_pix_0      ;
-	reg [DATA_WIDTH-1:0] v_pix_1      ;
-	reg [DATA_WIDTH-1:0] v_pix_result ;
-	reg                  v_pix_valid  ;
+	reg [DATA_WIDTH-1:0] v_pix_0     ;
+	reg [DATA_WIDTH-1:0] v_pix_1     ;
+	reg [DATA_WIDTH-1:0] v_pix_result;
+	reg                  v_pix_valid ;
 
 	// V-filter权重计算（双线性：2点）
-	wire [FRAC_BITS-1:0] w_y1 = coord_y_frac;
-	wire [FRAC_BITS-1:0] w_y0 = (1 << FRAC_BITS) - coord_y_frac;
+	wire [FRAC_BITS-1:0] w_y0, w_y1;
+
+	assign w_y1 = coord_y_frac;
+	assign w_y0 = (1 << FRAC_BITS) - coord_y_frac;
 
 	// 读取L2的同一列不同行
 	always @(posedge clk_out) begin

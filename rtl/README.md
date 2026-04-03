@@ -9,7 +9,7 @@ rtl/
 ├── README.md                          # 本文件
 ├── src/                               # RTL 源码
 │   ├── bilinear_scaler_vh.v           # V+H架构顶层模块（双线性）
-│   ├── line_buffer_2row_wrapper.v     # L1输入缓冲：2行ping-pong
+│   ├── line_buffer_wrapper.v          # 单行双口RAM wrapper（例化多个实现多行缓冲）
 │   ├── bilinear_coord_calc.v          # 坐标计算模块（可复用）
 │   ├── bilinear_interp.v              # 插值计算模块（可复用）
 │   ├── bilinear_scaler_arch.md        # 架构设计文档

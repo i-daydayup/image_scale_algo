@@ -25,8 +25,8 @@ module bilinear_coord_calc #(
 	parameter FRAC_BITS   = 8   ,// 坐标小数位宽 n
 	parameter WEIGHT_BITS = 8    // 权重小数位宽 w
 )(
-	input  wire                      clk         ,//I1,
-	input  wire                      rst_n       ,//I1,
+	input  wire                      	clk           ,//I1,
+	input  wire                      	rst_n         ,//I1,
 
 	input  wire [15:0]                   dst_idx      ,//I16,目标像素索引
 	input  wire [INT_BITS+FRAC_BITS-1:0] inv_scale    ,//Ix,逆缩放比例 (Qm.n)
@@ -113,9 +113,9 @@ module bilinear_coord_calc #(
 
 			// 边界保护：限制在 [0, (src_size-1) << FRAC_BITS]
 			if (src_pos_fixed[COORD_BITS-1] == 1'b1 || src_pos_fixed > ((src_size_d2 - 1) << FRAC_BITS))
-				src_pos_clamped <= (src_size_d2 - 1) << FRAC_BITS;
+				src_pos_clamped <= #U_DLY (src_size_d2 - 1) << FRAC_BITS;
 			else
-				src_pos_clamped <= src_pos_fixed;
+				src_pos_clamped <= #U_DLY src_pos_fixed;
 
 			valid_d3 <= #U_DLY valid_d2;
 		end
@@ -136,11 +136,11 @@ module bilinear_coord_calc #(
 
 			// 小数部分：转换到 Q0.w 格式
 			if (WEIGHT_BITS == FRAC_BITS)
-				src_pos_frac <= src_pos_clamped[FRAC_BITS-1:0];
+				src_pos_frac <= #U_DLY src_pos_clamped[FRAC_BITS-1:0];
 			else if (WEIGHT_BITS > FRAC_BITS)
-				src_pos_frac <= src_pos_clamped[FRAC_BITS-1:0] << (WEIGHT_BITS - FRAC_BITS);
+				src_pos_frac <= #U_DLY src_pos_clamped[FRAC_BITS-1:0] << (WEIGHT_BITS - FRAC_BITS);
 			else
-				src_pos_frac <= src_pos_clamped[FRAC_BITS-1:FRAC_BITS-WEIGHT_BITS];
+				src_pos_frac <= #U_DLY src_pos_clamped[FRAC_BITS-1:FRAC_BITS-WEIGHT_BITS];
 
 			valid <= #U_DLY valid_d3;
 		end
