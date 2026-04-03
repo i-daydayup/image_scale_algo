@@ -18,8 +18,8 @@ signalSpacing 3
 windowTimeUnit 10ns
 
 ; waveform viewport range
-zoom 231.280548 298.737375 10n
-cursor 257.600000
+zoom 0.000000 4072.673045 10n
+cursor 2128.600000
 marker 6.500000
 
 ; user define markers
@@ -27,7 +27,7 @@ marker 6.500000
 ; visible top row signal index
 top 0
 ; marker line index
-markerPos 28
+markerPos 14
 
 ; event list
 ; addEvent event_name event_expression
@@ -55,42 +55,23 @@ addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_inv_scale_x[19:0]
 addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_inv_scale_y[19:0]
 addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_src_height[15:0]
 addSignal -h 15 -UNSIGNED -HEX -holdScope cfg_src_width[15:0]
-addSignal -h 15 -holdScope rst_n
-addSignal -h 15 -holdScope clk
 addSignal -c ID_RED5 -ls solid -lw 1 -h 15 -holdScope i_ready
 addSignal -h 15 -UNSIGNED -UDEC -holdScope i_data[7:0]
 addSignal -h 15 -holdScope i_frame_start
 addSignal -h 15 -holdScope i_last
 addSignal -c ID_PURPLE5 -ls solid -lw 1 -h 15 -holdScope i_valid
-addSignal -h 15 -holdScope o_ready
 addSignal -h 15 -UNSIGNED -UDEC /ut_bilinear_scaler/frame_cnt[31:0]
-addGroup "G2"
-addSignal -h 15 -UNSIGNED -HEX /ut_bilinear_scaler/dut/o_data[7:0]
+addGroup "duv out"
+addSignal -h 15 /ut_bilinear_scaler/dut/o_ready
 addSignal -h 15 -holdScope o_frame_start
-addSignal -h 15 -holdScope o_last
 addSignal -h 15 -holdScope o_valid
+addSignal -h 15 -UNSIGNED -HEX -holdScope o_data[7:0]
+addSignal -h 15 -holdScope o_last
 addGroup "G3"
 addSignal -h 15 -UNSIGNED -UDEC /ut_bilinear_scaler/dut/r_dst_width[15:0]
 addSignal -h 15 -UNSIGNED -UDEC -holdScope r_dst_height[15:0]
 addSignal -h 15 -UNSIGNED -HEX -holdScope dst_x_cnt[15:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope state[2:0]
-addSignal -h 15 -UNSIGNED -UDEC -holdScope src_y_cnt[15:0]
-addSignal -h 15 -UNSIGNED -UDEC -holdScope src_x_cnt[15:0]
 addSignal -h 15 -UNSIGNED -UDEC -holdScope r_src_width[15:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope interp_result[7:0]
-addSignal -h 15 -UNSIGNED -HEX /ut_bilinear_scaler/dut/u_interp/sum[17:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope p00_w00[15:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope p10_w10[15:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope p01_w01[15:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope p11_w11[15:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope p11_reg[7:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope p11[7:0]
-addSignal -h 15 -UNSIGNED -HEX /ut_bilinear_scaler/dut/lb_rdata1[7:0]
-addSignal -h 15 -holdScope swap_d1
-addSignal -h 15 -UNSIGNED -HEX -holdScope raddr_d1[9:0]
-addSignal -h 15 -UNSIGNED -UDEC -holdScope lb_waddr[9:0]
-addSignal -h 15 -holdScope lb_wen
-addSignal -h 15 -holdScope lb_swap
 addGroup "G4"
 
 ; grid status
@@ -107,9 +88,9 @@ GETSIGNALFORM_SCOPE_HIERARCHY_BEGIN
 getSignalForm close
 
 "/std"
+"/std/semaphore"
 "/ut_bilinear_scaler"
 "/ut_bilinear_scaler/dut"
-"/ut_bilinear_scaler/dut/u_interp"
 
 SCOPE_LIST_BEGIN
 "/std"

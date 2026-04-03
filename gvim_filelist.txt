@@ -32,6 +32,7 @@
 ./rtl/src/
 ./rtl/src/bilinear_scaler.v
 ./rtl/src/bilinear_scaler_vh.v
+./rtl/src/line_buffer_2row_wrapper.v
 ./rtl/src/bilinear_coord_calc.v
 ./rtl/src/bilinear_interp.v
 ./rtl/src/line_buffer.v
