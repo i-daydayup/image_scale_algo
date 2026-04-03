@@ -6,21 +6,44 @@
 
 ```
 rtl/
-├── src/
-│   ├── bilinear_scaler.v      # 顶层模块
-│   ├── bilinear_coord_calc.v  # 坐标计算模块
-│   ├── bilinear_interp.v      # 插值计算模块
-│   ├── line_buffer.v          # 行缓冲模块
-│   └── filelist.f             # 文件列表
-├── tb/                        # Testbench (待添加)
-└── README.md                  # 本文件
+├── README.md                          # 本文件
+├── src/                               # RTL 源码
+│   ├── bilinear_scaler.v              # 顶层缩放模块（待重构）
+│   ├── bilinear_coord_calc.v          # 坐标计算模块
+│   ├── bilinear_interp.v              # 插值计算模块
+│   ├── line_buffer.v                  # 行缓冲模块
+│   ├── bilinear_scaler_arch.md        # 架构设计文档（V2双时钟域方案）
+│   └── filelist.f                     # 仿真文件列表
+├── sim/                               # 仿真测试
+│   └── ut_bilinear_scaler/            # 单元测试平台
+│       ├── ut_bilinear_scaler.v       # Testbench（AXI-S流式激励）
+│       ├── ut_bilinear_scaler.do      # ModelSim/QuestaSim 仿真脚本
+│       ├── ut_bilinear_scaler.mpf     # ModelSim 项目文件
+│       └── work/                      # 仿真编译目录（自动创建）
+└── ref/                               # 参考文档
+    ├── pg231-v-proc-ss-20240221.pdf   # Xilinx Video Processing Subsystem (v2.4)
+    └── pg231-v-proc-ss-20220427.pdf   # 旧版本参考
 ```
+
+## 设计状态
+
+⚠️ **当前状态**：`bilinear_scaler.v` 采用 **2-Buffer + 单时钟域 + 状态机** 架构，存在以下问题：
+- 输入输出速率不匹配时可能覆盖数据
+- 帧级状态机无法实现流式连续处理
+- 不适合显示接口的连续输出要求
+
+✅ **重构方向**：参考 `src/bilinear_scaler_arch.md`，采用：
+- **3-Buffer 轮转**（与 PG231 一致）
+- **双时钟域**（`clk_in` + `clk_out`）
+- **完全流式**（删除帧级状态机）
 
 ## 模块说明
 
-### 1. bilinear_scaler (顶层模块)
+### 1. bilinear_scaler (顶层模块 - 待重构)
 
 双线性插值图像缩放器主模块，支持 AXI-Stream 风格的视频流接口。
+
+**当前架构问题**：见上文"设计状态"
 
 #### 参数
 
@@ -33,7 +56,7 @@ rtl/
 | `MAX_WIDTH` | 4096 | 最大支持图像宽度 |
 | `MAX_HEIGHT` | 4096 | 最大支持图像高度 |
 
-#### 接口
+#### 接口（当前版本 - 单时钟域）
 
 **配置接口**（在 `i_frame_start` 前配置有效）：
 - `cfg_inv_scale_x` [COORD_BITS]：X方向逆缩放比例定点值 (Qm.n)
@@ -43,29 +66,33 @@ rtl/
 - `cfg_src_width` [16]：源图像宽度
 - `cfg_src_height` [16]：源图像高度
 
-**输入视频流** (AXI-Stream 风格)：
+**输入视频流** (AXI-Stream 风格)：**clk 域**
 - `i_valid`：输入数据有效
 - `i_data` [DATA_WIDTH]：输入像素数据
 - `i_last`：行结束标记
 - `i_frame_start`：帧开始标记 (tuser)
 - `i_ready`：模块就绪，可接收数据
 
-**输出视频流**：
+**输出视频流**：**clk 域**
 - `o_valid`：输出数据有效
 - `o_data` [DATA_WIDTH]：输出像素数据
 - `o_last`：行结束标记
 - `o_frame_start`：帧开始标记
 - `o_ready`：下游模块就绪
 
-#### 时序说明
+#### 接口（V2架构 - 双时钟域，计划中）
 
-| 路径 | 延迟 |
-|------|------|
-| 输入像素到行缓冲可读 | 2 拍 |
-| 行缓冲读取请求到数据有效 | 1 拍 |
-| 坐标输入到坐标输出 | 4 拍 |
-| 像素输入到插值结果 | 3 拍 |
-| **总延迟 (输入帧开始到输出帧开始)** | **可变** |
+```verilog
+// 输入时钟域 (DDR/源图像)
+input  wire clk_in,           // 输入时钟
+input  wire rst_n_in,         // 输入复位
+
+// 输出时钟域 (显示/目标图像)  
+input  wire clk_out,          // 输出时钟
+input  wire rst_n_out,        // 输出复位
+
+// 输入/输出 AXI-S 信号分别对应各自时钟域
+```
 
 #### 定点配置计算
 
@@ -125,15 +152,55 @@ result = (P00*w00 + P10*w10 + P01*w01 + P11*w11) >> w
 
 ### 4. line_buffer (行缓冲模块)
 
-双行缓冲，存储相邻两行像素用于插值。
+行缓冲模块，存储一行像素数据。
 
-**存储器实现**：标准 Verilog 数组（器件无关）
+**存储器实现**：标准 Verilog 数组（综合为 Block RAM 或分布式 RAM）
 
 | 操作 | 延迟 |
 |------|------|
 | 写入到存储器更新 | 1 拍 |
-| 写入到可读 | 2 拍 |
 | 读出请求到数据有效 | 1 拍 |
+
+---
+
+## 仿真测试
+
+### 运行仿真
+
+```bash
+# 进入仿真目录
+cd rtl/sim/ut_bilinear_scaler
+
+# 使用 ModelSim/QuestaSim
+vsim -c -do "run -all; quit" ut_bilinear_scaler
+
+# 或使用 GUI 模式
+vsim ut_bilinear_scaler
+```
+
+### Testbench 特性
+
+`ut_bilinear_scaler.v` 包含：
+- AXI-S 协议握手逻辑（`i_ready` 响应）
+- 流式数据生成（水平渐变测试图）
+- 帧开始标记（首像素为 0xF5）
+- 输出数据保存到 `output_verilog.hex`
+
+---
+
+## 参考文档
+
+### PG231 - Video Processing Subsystem (Xilinx/AMD)
+
+**文件**: `ref/pg231-v-proc-ss-20240221.pdf` (v2.4)
+
+**关键参考点**：
+- **3-Buffer 架构**：Deinterlacer 使用 3 个 field buffers（验证我们 V2 架构）
+- **Scaler 模式**：Stream Mode（无 DDR）vs Memory Mode（有 DDR）
+- **V+H 分离**：垂直和水平滤波分离可减少资源
+- **Polyphase**：多相缩放原理（phase bin 概念）
+
+详见 `src/bilinear_scaler_arch.md` 第5节。
 
 ---
 
@@ -180,14 +247,21 @@ bilinear_scaler #(
 
 ## 综合说明
 
-### 资源预估
+### 资源预估（当前版本）
 
 | 模块 | LUT | FF | RAM |
 |------|-----|----|-----|
 | bilinear_coord_calc | ~200 | ~150 | 0 |
 | bilinear_interp | ~300 | ~200 | 0 |
-| line_buffer (1920x8x2) | 0 | ~100 | ~4KB |
-| **bilinear_scaler (顶层)** | ~800 | ~600 | ~4KB |
+| line_buffer (1920x8) | 0 | ~50 | ~2KB |
+| **bilinear_scaler (当前)** | ~800 | ~600 | ~4KB |
+
+### 资源预估（V2 3-Buffer架构）
+
+| 模块 | LUT | FF | RAM |
+|------|-----|----|-----|
+| bilinear_scaler | ~1000 | ~800 | ~6KB |
+| 跨时钟域同步 | ~100 | ~200 | 0 |
 
 *注：实际资源消耗取决于参数配置和综合工具优化*
 
@@ -211,3 +285,13 @@ bilinear_scaler #(
 2. Verilog testbench 读取测试向量
 3. 对比 Verilog 输出与 golden
 4. 允许误差：±1 (定点数舍入误差)
+
+---
+
+## 待办事项
+
+- [ ] 重构 `bilinear_scaler.v`：3-Buffer + 双时钟域架构
+- [ ] 删除帧级状态机，改为流式控制
+- [ ] 增加跨时钟域同步模块（脉冲同步器）
+- [ ] 更新 Testbench 支持双时钟激励
+- [ ] 与 PG231 架构对比验证

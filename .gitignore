@@ -21,3 +21,5 @@ results/
 *.tlist
 *.log
 *.hex
+rtl/ref/pg231-v-proc-ss-20220427.pdf
+rtl/ref/pg231-v-proc-ss-20240221.pdf

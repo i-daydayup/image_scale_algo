@@ -379,3 +379,52 @@ project/
 ### 算法转 RTL 时
 - [ ] 询问定点数格式 (Qm.n)、行缓冲深度、处理延迟
 - [ ] 生成 Python 参考模型和测试向量生成脚本
+
+### 器件无关设计原则
+- [ ] **Wrapper 封装**：RAM、FIFO 等器件相关原语，通过 wrapper 模块封装
+  - 接口统一，内部实现根据厂商切换（Generic/Xilinx/Lattice/Intel）
+  - **按需创建**：遇到需要时再建立 wrapper，不预先创建未使用的 wrapper
+  - 迁移时只需替换 wrapper 实现文件，功能模块代码零修改
+- [ ] 在文件头标注对应 wrapper 路径，便于后续维护
+
+---
+
+## 7. 重要参考文档
+
+### PG231 - Video Processing Subsystem (AMD/Xilinx)
+
+**文档路径**: `rtl/ref/pg231-v-proc-ss-20240221.pdf`
+
+**版本**: v2.4 (February 21, 2024)
+
+**核心启发**:
+
+1. **3-Buffer 架构验证**
+   - Deinterlacer 使用 3 个 field buffers 进行时域处理
+   - 验证了我们设计的 **3-Line Buffer 轮转架构** 的合理性
+
+2. **Scaler 工作模式**
+   - **Stream Mode**: Scaler-only 配置可在无外部 DDR 情况下工作
+   - 支持任意缩放比例，只要流带宽匹配（pixels/clock × frequency）
+   - 对比：如需帧率转换或裁剪，则需要外部帧缓冲
+
+3. **V+H 分离架构**
+   - 垂直滤波和水平滤波分离实现
+   - 优点：减少乘法器数量，提高时钟频率
+   - 公式：`VPix = Σ(Vcoef[i] × Vin[x, y+i])`，`Pixout = Σ(Hcoef[i] × VPix[x+i, y])`
+
+4. **Polyphase Scaling 原理**
+   - 输出网格与输入网格叠加，每个输出像素落在某个 phase bin 中
+   - 相位由输出像素相对输入像素的位置决定
+   - 我们的 **定点数坐标计算**（coord_int + frac）正是 phase 概念的实现
+
+5. **Buffer 管理策略**
+   - Full Fledged 配置使用 5 个 frame buffers（progressive）或 3 个 field buffers（interlaced）
+   - 读写指针管理：读指针始终比写指针落后 1 帧
+   - 帧率转换通过丢帧/重复帧实现
+
+**设计建议**:
+- 纯放大器（upsampler）优先考虑 **Stream Mode**（内部 Line Buffer）
+- 如需支持帧率转换或裁剪，则必须使用 **Memory Mode**（外部 DDR）
+- 高资源效率考虑 **V+H 分离** 架构
+- 预留 **多相滤波系数** 接口，便于扩展 bicubic/polyphase 模式
