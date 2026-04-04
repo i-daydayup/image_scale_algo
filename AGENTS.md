@@ -300,6 +300,88 @@ end
 - **禁止**逻辑非：`if (!valid)` → `if (valid == 1'b0)`
 - 组合逻辑中的条件同样遵循此规则：`if (state == IDLE && valid == 1'b1)`
 
+#### 跨时钟域同步编码规范
+
+**信号命名规则**：
+
+| 信号类型 | 命名后缀 | 位宽表示 | 示例 | 含义 |
+|---------|---------|---------|------|------|
+| **单bit延时** | `_dy` | `[N:0]` 或 `[N-1:0]` | `signal_dy[1:0]` | N+1拍延迟链，移位寄存器 |
+| **多bit延时** | `_d0`, `_d1` | 原bit宽 | `data_d0`, `data_d1` | 依次打拍，d0=第1拍，d1=第2拍 |
+
+**单bit信号延时风格**：
+```verilog
+// 2-stage同步（单bit用_dy[1:0]）
+reg		[1:0]	signal_dy;
+always @(posedge clk or negedge rst_n) begin
+	if (rst_n == 1'b0) 
+		signal_dy <= 2'd0;
+	else begin
+		// 移位链：{当前最高位, 新数据}
+		signal_dy <= #U_DLY {signal_dy[0], signal_in};
+	end
+end
+
+// 边沿检测使用_dy[0]和_dy[1]
+wire pos_edge = (signal_dy[0] == 1'b1) && (signal_dy[1] == 1'b0);
+wire neg_edge = (signal_dy[0] == 1'b0) && (signal_dy[1] == 1'b1);
+```
+
+**多bit信号延时风格**：
+```verilog
+// 2-stage打拍（多bit用_d0, _d1）
+reg [15:0] data_d0;
+reg [15:0] data_d1;
+always @(posedge clk or negedge rst_n) begin
+	if (rst_n == 1'b0) begin
+		data_d0 <= 16'd0;
+		data_d1 <= 16'd0;
+	end
+	else begin
+		data_d0 <= #U_DLY data_in;    // 第1拍
+		data_d1 <= #U_DLY data_d0;    // 第2拍
+	end
+end
+```
+
+**Always块分离原则（重要）**：
+- ✅ **推荐**：一个always块内，**不同条件的信号分开在不同的if/else块**描述
+- ❌ **禁止**：把多个不同条件的赋值揉在同一个if/else里
+
+```verilog
+// ✅ 正确：条件不同，分开描述
+always @(posedge clk or negedge rst_n) begin
+	// _dy移位链（条件：每拍都更新）
+	if (rst_n == 1'b0) 
+		sel_dy <= 2'd0;
+	else begin
+		sel_dy <= #U_DLY {sel_dy[0], sel_in};
+	end
+	
+	// synced采样（条件：边沿检测）
+	if (rst_n == 1'b0) 
+		data_synced <= 16'd0;
+	else begin			
+		if (sel_dy[0] != sel_dy[1]) begin  // 边沿检测
+			data_synced <= #U_DLY (sel_dy[0] == 1'b1) ? data_odd : data_even;
+		end
+	end
+end
+
+// ❌ 错误：揉在一起，条件不清晰
+always @(posedge clk) begin
+	if (rst_n == 1'b0) begin
+		sel_dy <= 2'd0;
+		data_synced <= 16'd0;
+	end
+	else begin
+		sel_dy <= {sel_dy[0], sel_in};  // 每拍都更新
+		if (sel_dy[0] != sel_dy[1])     // 只有边沿时更新
+			data_synced <= ...;
+	end
+end
+```
+
 ### 3.5 视频接口规范
 
 #### AXI-Stream 风格接口

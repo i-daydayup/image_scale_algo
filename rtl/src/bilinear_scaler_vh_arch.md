@@ -2,15 +2,16 @@
 
 ## 1. 架构概述
 
-基于 PG231 的 **V+H 分离架构**（先垂直插值，后水平插值），采用 **4-Buffer 轮转 + 1 行输出 FIFO** 设计，确保显示连续性。
+基于 PG231 的 **V+H 分离架构**（先垂直插值，后水平插值），采用 **3-Buffer L1 轮转 + 1 行输出 FIFO** 设计，确保显示连续性。
 
 ### 1.1 核心特性
 
 - **V+H 分离**：V-filter（异行同列）→ H-filter（同行异列）
-- **流式处理**：3 行输入后即可开始输出（双线性只需 2 行，第 3 行预缓冲）
+- **流式处理**：3 行输入后即可开始输出（双线性只需 2 行运算+1行预缓冲）
 - **双时钟域**：`clk_in`（输入/DDR）+ `clk_out`（输出/显示）
 - **3-Buffer L1**：3 行输入缓冲，V-filter 滑动窗口管理
-- **输出缓冲**：1 行 FIFO 吸收速率波动，防止显示 underrun
+- **VPix 不进 RAM**：V-filter 输出直接进 H-filter 移位寄存器，节省存储
+- **输出 FIFO**：1 行缓冲吸收速率波动，防止显示 underrun
 
 ### 1.2 架构框图
 
@@ -20,70 +21,61 @@
 │                                                                                 │
 │  clk_in domain                              clk_out domain                      │
 │  ┌─────────────────────┐                   ┌─────────────────────┐              │
-│  │   Input Buffer      │                   │   Output FIFO       │              │
+│  │   L1 Input Buffer   │                   │   L2 Output FIFO    │              │
 │  │   (3-Buffer Ring)   │                   │   (1-Line Buffer)   │              │
 │  │                     │                   │                     │              │
-│  │  ┌─────┐ ┌─────┐   │   Async FIFO      │  ┌─────────────┐   │              │
-│  │  │Buf0 │ │Buf1 │   │   (Status Sync)   │  │  1-Line     │   │              │
-│  │  │(0/1)│ │(0/1)│   │◄─────────────────►│  │  Buffer     │   │              │
-│  │  └─────┘ └─────┘   │                   │  │  (3840x8b)  │   │              │
+│  │  ┌─────┐ ┌─────┐   │                   │  ┌─────────────┐   │              │
+│  │  │Buf0 │ │Buf1 │   │  Async Handshake  │  │  1-Line     │   │              │
+│  │  │(0/1)│ │(0/1)│   │◄─────────────────►│  │  FIFO       │   │              │
+│  │  └─────┘ └─────┘   │  (v_min_src_row)  │  │  (3840x8b)  │   │              │
 │  │  ┌─────┐           │                   │  └──────┬──────┘   │              │
 │  │  │Buf2 │           │                   │         │          │              │
 │  │  │(0/1)│           │                   │    o_valid/o_ready  │              │
 │  │  └─────┘           │                   │         │          │              │
 │  └──────────┬──────────┘                   └─────────┼──────────┘              │
 │             │                                        │                         │
-│             ▼                                        ▼                         │
-│  ┌─────────────────────┐                   ┌─────────────────────┐              │
-│  │   V-Filter          │                   │   H-Filter          │              │
-│  │   (Vertical Interp) │                   │   (Horizontal Interp)│             │
-│  │                     │                   │                     │              │
-│  │  Input: 4 pixels    │                   │  Input: 4 VPix      │              │
-│  │  (same col, diff row)│                  │  (same row, diff col)│             │
-│  │                     │                   │                     │              │
-│  │  Output: 1 VPix     │──────────────────►│  Output: 1 pixel    │─────────────►│
-│  │  (per column)       │   (VPix stream)   │  (final result)     │              │
-│  └─────────────────────┘                   └─────────────────────┘              │
-│                                                                                 │
+│             │     ┌──────────┐      ┌──────────┐    │                         │
+│             └────►│ V-filter │─────►│ H-filter │───┘                          │
+│                   │ (2-tap)  │      │ (2-tap)  │                               │
+│                   └──────────┘      └──────────┘                               │
+│                         ▲                  ▲                                    │
+│                         │                  │                                    │
+│                    【VPix不进RAM，直接进H-filter移位寄存器】                        │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. 缓冲架构设计
+## 2. 缓冲架构设计（两级缓冲）
 
-### 2.1 三级缓冲架构
+本设计采用 **两级缓冲架构**：
 
-本设计采用 **三级缓冲架构**，平衡 DDR 效率、运算需求和显示连续性：
+| 层级 | 数量 | 作用 | 实现方式 | 存储内容 |
+|------|------|------|----------|----------|
+| **L1: 输入缓冲** | **3 行** | DDR 预缓冲，V-filter滑动窗口 | line_buffer_wrapper ×3 | 源图像原始像素 |
+| **L2: 输出 FIFO** | **1 行** | H-filter 最终结果缓冲，显示连续性 | output_line_fifo | 最终输出像素 |
 
-| 层级 | 数量 | 作用 | 实现方式 |
-|------|------|------|----------|
-| **L1: 输入缓冲** | **3 行** | DDR 预缓冲，V-filter滑动窗口 | line_buffer_wrapper ×3 |
-| **L2: V-filter 缓冲** | **2 行** | 垂直插值运算（双线性） | scaler 内部 2-line |
-| **L3: 输出 FIFO** | **1 行** | 显示连续性 | output_line_fifo |
+**VPix 中间结果**：**不进 RAM**，直接通过 **寄存器流水线** 从 V-filter 送入 H-filter 移位寄存器。
 
-**总存储需求：6 行 × src_width × DATA_WIDTH**
+**总存储需求：4 行 × src_width × DATA_WIDTH**（3行L1 + 1行L2）
 
-**关键改进**：
-- **3-Buffer L1**：支持 V-filter 滑动窗口（2行运算+1行预缓冲）
-- **1r0w 状态管理**：每个 buffer 独立标记可读(1)/可写(0)
-- **动态释放**：根据 V-filter 窗口位置 (`v_min_src_row`) 决定释放时机
+---
 
-### 2.2 L1 输入缓冲设计（3-Buffer 架构）
+## 3. L1 输入缓冲设计（3-Buffer 架构）
 
-#### 设计原则
+### 3.1 设计原则
 
 - **3-Buffer 轮转**：支持 V-filter 滑动窗口（2行运算 + 1行预缓冲）
-- **1r0w 状态管理**：1=可读，0=可写，避免多 buffer 同时可写的歧义
+- **busy_num + line_id 管理**：用 `busy_num` 记录已占用buffer数，用 `line_id` 记录每行存储的源行号，通过比较 `v_min_src_row` 决定释放时机
 - **器件无关**：通过 wrapper 封装，内部可用 Generic RAM、Xilinx BRAM、Lattice EBR 等
 - **时序收敛**：wrapper 内部对输入/输出打拍，上层模块无需关心时序细节
 
-#### 核心信号定义
+### 3.2 核心信号定义
 
 ```verilog
 // L1 写控制（clk_in 域）
 reg  [1:0]  l1_wr_buf_sel;       // 写buffer选择: 0/1/2 循环
-reg  [1:0]  l1_buf_busy_num;     // 已占用buffer数: 0/1/2/3
+reg  [1:0]  l1_buf_busy_num;     // 已占用buffer数: 0/1/2/3（饱和在3）
 reg  [15:0] in_row_idx;          // 输入行计数器（0开始）
 reg  [15:0] l1_buf0_line_id;     // buffer0存储的源行号
 reg  [15:0] l1_buf1_line_id;     // buffer1存储的源行号
@@ -95,7 +87,7 @@ wire [ADDR_WIDTH:0] l1_buf1_datacnt;
 wire [ADDR_WIDTH:0] l1_buf2_datacnt;
 ```
 
-#### i_ready 反压逻辑
+### 3.3 i_ready 反压逻辑
 
 ```verilog
 // i_ready：busy_num < 3 时无条件可写；busy_num == 3 时需判断可释放
@@ -109,7 +101,7 @@ assign buf_can_release =
      (l1_wr_buf_sel == 2'd2 && l1_buf2_line_id < v_min_src_row_synced));
 ```
 
-#### 3-Buffer 状态机（写侧）
+### 3.4 3-Buffer 状态机（写侧）
 
 ```verilog
 // sel 循环：0 -> 1 -> 2 -> 0
@@ -127,7 +119,7 @@ sel = 0, busy_num = 0
 // 写行3：覆盖 buf0，sel->1, busy_num 保持 3
 ```
 
-#### 完整时间线验证
+### 3.5 完整时间线验证
 
 | 阶段 | sel | busy_num | buf0 | buf1 | buf2 | 操作 |
 |------|-----|----------|------|------|------|------|
@@ -140,39 +132,11 @@ sel = 0, busy_num = 0
 
 **关键观察**：
 - `busy_num` 从 0 递增到 3 后保持饱和
-- `sel` 始终指向**最老的** buffer（待写入/覆盖）
-- 写前必须判断：`buf_line_id < v_min_src_row`（该行已不在 V-filter 窗口内）
+- `sel` 始终指向**最老的** buffer（FIFO顺序：0→1→2→0）
+- 释放判断：`buf_line_id < v_min_src_row_synced`（该行已不在 V-filter 窗口内）
+- 无需独立的1r0w标志位，通过 `busy_num` 和 `line_id` 比较实现管理
 
-#### 模块接口（line_buffer_wrapper）
-
-```verilog
-module line_buffer_wrapper #(
-    parameter DATA_WIDTH = 8,
-    parameter MAX_WIDTH  = 4096,
-    parameter ADDR_WIDTH = $clog2(MAX_WIDTH),
-    parameter VENDOR     = "GENERIC"
-)(
-    input  wire                  clk,
-    input  wire                  rst_n,
-    
-    // 写端口（DDR 输入）
-    input  wire                  wr_en,
-    input  wire [ADDR_WIDTH-1:0] wr_addr,
-    input  wire [DATA_WIDTH-1:0] wr_data,
-    output wire                  wr_full,
-    
-    // 读端口（V-filter 消费）
-    input  wire                  rd_en,
-    input  wire [ADDR_WIDTH-1:0] rd_addr,
-    output reg  [DATA_WIDTH-1:0] rd_data,
-    output reg                   rd_data_valid,
-    
-    // 数据计数（读时钟域可见，用于判断buffer是否可读满）
-    output wire [ADDR_WIDTH:0]   datacnt
-);
-```
-
-#### 5 个独立的 Always 块
+### 3.6 5 个独立的 Always 块（写控制）
 
 ```verilog
 // 1. 写地址计数器（复位或正常写入递增）
@@ -212,227 +176,17 @@ always @(posedge clk_in) begin
 end
 ```
 
-#### 单元测试策略
-
-1. **3-Buffer 轮转**：验证 sel 循环 0->1->2->0
-2. **busy_num 饱和**：验证从 0->3 后保持 3
-3. **v_min_src_row 释放**：模拟 V-filter 释放信号，验证覆盖逻辑
-4. **datacnt 同步**：验证写时钟域的 datacnt 能正确反映到读侧
-5. **帧开始复位**：验证 frame_start 时所有状态清零
-
-### 2.3 L2 V-Filter 输出缓冲（VPix 行缓冲）
-
-**关键纠正**：L2 **不存储从 L1 搬来的原始行**，而是存储 **V-filter 计算后的中间结果（VPix 行）**。
-
-#### 设计原理
-
-在 V+H 架构中：
-1. **V-filter** 实时从 L1 读取 **异行同列** 的 2 个像素，计算 VPix
-2. **L2** 存储 V-filter 输出的一整行 VPix
-3. **H-filter** 从 L2 读取 VPix，进行水平插值
-
-#### 存储需求
-
-| 参数 | 数值 | 说明 |
-|------|------|------|
-| 深度 | MAX_WIDTH (如 4096) | 一行最大像素数 |
-| 宽度 | DATA_WIDTH (如 8/10/12) | VPix 位宽 |
-| 数量 | **1 行** | 双线性 V-filter 只需缓冲 1 行 VPix |
-
-```verilog
-// L2: 1 行 VPix 缓冲（双线性）
-reg [DATA_WIDTH-1:0] vpix_line [0:MAX_WIDTH-1];
-
-// 写控制：V-filter 输出
-wire                  vpix_wr_en;
-wire [ADDR_WIDTH-1:0] vpix_wr_addr;
-wire [DATA_WIDTH-1:0] vpix_wr_data;
-
-// 读控制：H-filter 输入
-wire                  vpix_rd_en;
-wire [ADDR_WIDTH-1:0] vpix_rd_addr;
-reg  [DATA_WIDTH-1:0] vpix_rd_data;
-```
-
-### 2.4 L3 输出 FIFO 设计
-
-1 行缓冲，平滑输出到显示接口。详见第 7 节。
-
 ---
 
-## 3. 数据流详解（V+H 架构正确实现）
+## 4. L1 读控制与 V-filter 实时计算
 
-### 3.1 阶段划分（修正版）
+### 4.1 核心设计原则
 
-| 阶段 | 操作 | 延迟 | 说明 |
-|------|------|------|------|
-| **Stage 1** | DDR 写入 L1 缓冲 | 3 行时间 | 3 行 buffer 攒满（2行运算+1行预缓冲） |
-| **Stage 2** | V-filter 实时读取 | 1 时钟/列 | 从 L1 读 2 行同列像素，输出 VPix |
-| **Stage 3** | VPix 行缓冲 | 1 行时间 | V-filter 输出写入 L2（1行 VPix） |
-| **Stage 4** | H-filter | 1 时钟/像素 | 从 L2 读 VPix，水平插值输出 |
-| **Stage 5** | 输出 FIFO | 1~N 时钟 | 缓冲 1 行，确保显示连续性 |
+**VPix 不进 RAM**：V-filter 输出直接进 H-filter 移位寄存器，不整行存储。
 
-**关键纠正**：
-- **无 DMA 传输**：L1 → L2 不是整行搬运，而是 V-filter **实时按需读取**
-- **L2 存 VPix**：不是原始像素，而是 V-filter 计算后的中间结果
-- **地址实时生成**：根据 `dst_x_cnt` 实时计算 L1 读地址
+### 4.2 L1 读控制逻辑
 
-### 3.2 详细时序（正确 V+H 数据流）
-
-```
-【输入阶段】
-T0-T2: DDR 依次写行0,1,2 到 L1 buf0,1,2
-       L1状态: buf0=行0, buf1=行1, buf2=行2
-
-【V-filter 开始计算 dst_y=0】
-假设 need_src_y = 0.25 → 需要 行0 + 行1
-
-时钟0: V-filter 读 L1
-       - buf0[0] (行0,列0)
-       - buf1[0] (行1,列0)
-       计算 VPix[0] = interp(行0[0], 行1[0], 0.25)
-       写入 L2[0]
-
-时钟1: V-filter 读 L1
-       - buf0[1] (行0,列1)
-       - buf1[1] (行1,列1)
-       计算 VPix[1] = interp(行0[1], 行1[1], 0.25)
-       写入 L2[1]
-
-...持续列计算...
-
-时钟N: V-filter 完成整行 VPix，写入 L2
-
-【H-filter 处理 L2】
-H-filter 从 L2 读取 VPix[0], VPix[1], VPix[2], VPix[3]
-凑齐 4-tap 后输出第一个最终像素
-
-【V-filter 计算 dst_y=1】
-假设 need_src_y = 0.75 → 仍需要 行0 + 行1
-继续读 buf0, buf1 的对应列...
-
-【V-filter 计算 dst_y=2】
-假设 need_src_y = 1.25 → 需要 行1 + 行2
-切换到读 buf1, buf2...
-
-【窗口滑动】
-当 need_src_y > 1（超过行1），行0 可释放
-buf0 被复用写入新行...
-```
-
-### 3.3 L1 Buffer 与 V-filter 协作机制
-
-```
-协作原理：
-
-1. 坐标计算（根据 dst_y_cnt）
-   src_y = (dst_y + 0.5) / vsf - 0.5
-   need_y0 = floor(src_y)
-   need_y1 = need_y0 + 1
-
-2. L1 Buffer 匹配
-   检查 l1_buf0_line_id, l1_buf1_line_id, l1_buf2_line_id
-   找到等于 need_y0 和 need_y1 的 buffer
-
-3. 实时读取
-   根据 dst_x_cnt 生成列地址
-   同时读两个 buffer 的对应列
-
-4. V-filter 计算
-   2-tap 插值（双线性）
-   VPix = p0 * (1-dy_frac) + p1 * dy_frac
-
-5. 窗口滑动检测
-   当 dst_y_cnt 增加，need_y0 可能前进
-   当 need_y0 > buf_line_id，该 buffer 可释放
-```
-
-**关键时序**：
-- 每个时钟周期：V-filter 读 L1 → 计算 VPix → 写 L2
-- H-filter 延迟 3-4 时钟后从 L2 读数 → 输出最终像素
-- L1 释放与写入并行：窗口滑动时，最老 buffer 立即复用
-
----
-
-## 4. L2 VPix 行缓冲设计（修正版）
-
-### 4.1 功能定位
-
-**纠正**：L2 **不是**从 L1 搬运数据的缓冲，而是存储 **V-filter 计算后的 VPix 行**。
-
-在 V+H 架构中：
-- V-filter 实时读取 L1 的 2 个像素（异行同列）
-- 计算得到 1 个 VPix（垂直插值结果）
-- VPix 按列顺序写入 L2
-- H-filter 从 L2 读取 VPix 进行水平插值
-
-### 4.2 存储结构
-
-```verilog
-// L2: 1 行 VPix 缓冲（双线性只需 1 行）
-// 双三次需要 4 行 VPix 缓冲用于 H-filter 的 4-tap 运算
-
-// 双线性配置（2-tap V-filter, 2-tap H-filter）
-reg [DATA_WIDTH-1:0] vpix_buf [0:MAX_WIDTH-1];
-
-// 双三次配置（4-tap V-filter, 4-tap H-filter）
-reg [DATA_WIDTH-1:0] vpix_buf [0:3][0:MAX_WIDTH-1];
-```
-
-### 4.3 接口定义
-
-```verilog
-// V-filter → L2 写入接口
-wire                  vpix_wr_en;      // VPix 写使能
-wire [ADDR_WIDTH-1:0] vpix_wr_addr;    // 列地址（等于 dst_x_cnt）
-wire [DATA_WIDTH-1:0] vpix_wr_data;    // V-filter 输出
-wire                  vpix_wr_line_done; // 整行完成
-
-// L2 → H-filter 读取接口
-wire                  vpix_rd_en;      // H-filter 读使能
-wire [ADDR_WIDTH-1:0] vpix_rd_addr;    // 列地址
-reg  [DATA_WIDTH-1:0] vpix_rd_data;    // 输出到 H-filter
-wire                  vpix_rd_valid;   // 数据有效
-```
-
-### 4.4 VPix 行缓冲控制
-
-```verilog
-// V-filter 写入控制
-always @(posedge clk_out) begin
-    if (v_filter_valid) begin
-        vpix_buf[vpix_wr_addr] <= #U_DLY v_filter_result;
-    end
-end
-
-// H-filter 读取控制（可能延迟 3-4 时钟启动）
-always @(posedge clk_out) begin
-    if (vpix_rd_en)
-        vpix_rd_data <= #U_DLY vpix_buf[vpix_rd_addr];
-end
-```
-
-### 4.5 乒乓缓冲（可选）
-
-如果 H-filter 需要连续读取而 V-filter 正在写入下一行：
-
-```verilog
-// 双缓冲方案
-reg [DATA_WIDTH-1:0] vpix_buf_even [0:MAX_WIDTH-1];
-reg [DATA_WIDTH-1:0] vpix_buf_odd  [0:MAX_WIDTH-1];
-reg                  vpix_buf_sel;  // 0=even, 1=odd
-
-// V-filter 写入当前 buffer
-// H-filter 读取另一 buffer
-```
-
----
-
-## 5. L1 读控制与 V-filter 实时计算
-
-### 5.1 L1 读控制逻辑
-
-**核心**：根据 `dst_x_cnt` 和 `dst_y_cnt` 实时生成 L1 读地址和 buffer 选择。
+根据 `dst_x_cnt` 和 `dst_y_cnt` 实时生成 L1 读地址和 buffer 选择：
 
 ```verilog
 // 坐标计算模块（复用 bilinear_coord_calc）
@@ -462,9 +216,7 @@ assign l1_rd_addr = dst_x_cnt;  // 可能需要根据 hsf 调整
 assign l1_rd_en = v_filter_active;
 ```
 
-### 5.2 V-filter 实时计算
-
-**双线性 V-filter（2-tap）**：
+### 4.3 V-filter 实时计算（2-tap）
 
 ```verilog
 module v_filter_2tap #(
@@ -480,7 +232,7 @@ module v_filter_2tap #(
     input  wire [FRAC_BITS-1:0]          dy_frac,    // 垂直权重
     input  wire                          valid_in,
     
-    output reg  [DATA_WIDTH-1:0]         vpix,       // VPix 输出
+    output reg  [DATA_WIDTH-1:0]         vpix,       // VPix 输出（不进RAM！）
     output reg                           valid_out
 );
     // 权重计算
@@ -500,7 +252,7 @@ module v_filter_2tap #(
 endmodule
 ```
 
-### 5.3 时序流程
+### 4.4 VPix 流水线（直接进 H-filter）
 
 ```
 时钟0: 生成 dst_x_cnt, dst_y_cnt
@@ -508,25 +260,34 @@ endmodule
        匹配 L1 buffer，生成 sel_y0, sel_y1
        输出 l1_rd_addr
 
-时钟1: L1 输出 p0, p1（2 时钟延迟后）
-       V-filter 计算 VPix
+时钟1-2: L1 输出 p0, p1（经过 wrapper 延迟）
 
-时钟2: VPix 写入 L2
+时钟3: V-filter 计算 VPix
+       ↓
+       VPix 直接进入 H-filter 移位寄存器（不进 L2！）
 
-时钟3-6: H-filter 读取 VPix，凑齐 4-tap 后输出
+时钟4-6: H-filter 从移位寄存器读取，计算最终像素
+
+时钟7: H-filter 输出写入 L2（最终像素）
 ```
+
+**关键点**：
+- VPix 只在 **流水线寄存器** 中存在
+- **不整行存储 VPix**
+- L2 只存 **H-filter 输出**（最终结果）
 
 ---
 
-## 6. H-Filter（水平插值）
+## 5. H-Filter（水平插值）
 
-### 6.1 功能描述
+### 5.1 功能描述
 
-- **输入**：L2 存储的 VPix 行
+- **输入**：V-filter 输出的 VPix（直接进入移位寄存器，不进 L2）
 - **输出**：最终像素（水平插值结果）
-- **延迟**：2-4 时钟（取决于 tap 数）
+- **延迟**：2 时钟（2-tap 双线性）
+- **关键**：VPix 通过 **reg [0:1]** 移位寄存器处理，不整行存储
 
-### 6.2 双线性 H-filter（2-tap）
+### 5.2 双线性 H-filter（2-tap）
 
 ```verilog
 module h_filter_2tap #(
@@ -536,8 +297,7 @@ module h_filter_2tap #(
     input  wire                  clk,
     input  wire                  rst_n,
     
-    // 从 L2 读取的 VPix 流
-    input  wire [DATA_WIDTH-1:0] vpix,       // V-filter 输出（已存 L2）
+    input  wire [DATA_WIDTH-1:0] vpix,       // 来自 V-filter
     input  wire [FRAC_BITS-1:0]  dx_frac,    // 水平权重
     input  wire                  valid_in,
     
@@ -545,13 +305,12 @@ module h_filter_2tap #(
     output reg                   valid_out
 );
     // 2-tap 移位寄存器
-    reg [DATA_WIDTH-1:0] shift_reg0;
-    reg [DATA_WIDTH-1:0] shift_reg1;
+    reg [DATA_WIDTH-1:0] shift_reg [0:1];
     
     always @(posedge clk) begin
         if (valid_in) begin
-            shift_reg1 <= shift_reg0;  // 右移
-            shift_reg0 <= vpix;
+            shift_reg[1] <= shift_reg[0];  // 右移
+            shift_reg[0] <= vpix;          // VPix 直接进入
         end
     end
     
@@ -559,18 +318,18 @@ module h_filter_2tap #(
     wire [FRAC_BITS-1:0] w0 = (1 << FRAC_BITS) - dx_frac;
     wire [FRAC_BITS-1:0] w1 = dx_frac;
     
-    wire [DATA_WIDTH+FRAC_BITS-1:0] mult0 = shift_reg0 * w0;
-    wire [DATA_WIDTH+FRAC_BITS-1:0] mult1 = shift_reg1 * w1;
+    wire [DATA_WIDTH+FRAC_BITS-1:0] mult0 = shift_reg[0] * w0;
+    wire [DATA_WIDTH+FRAC_BITS-1:0] mult1 = shift_reg[1] * w1;
     wire [DATA_WIDTH+FRAC_BITS:0]   sum   = mult0 + mult1;
     
     always @(posedge clk) begin
         h_pix     <= #U_DLY sum >> FRAC_BITS;
-        valid_out <= #U_DLY valid_in;  // 可能需要延迟 1 时钟
+        valid_out <= #U_DLY valid_in;
     end
 endmodule
 ```
 
-### 6.3 双三次 H-filter（4-tap）
+### 5.3 双三次 H-filter（4-tap，扩展）
 
 ```verilog
 module h_filter_4tap #(
@@ -580,7 +339,7 @@ module h_filter_4tap #(
     input  wire                  clk,
     input  wire                  rst_n,
     
-    input  wire [DATA_WIDTH-1:0] vpix,       // 从 L2 读取
+    input  wire [DATA_WIDTH-1:0] vpix,       // 来自 V-filter
     input  wire [FRAC_BITS-1:0]  dx_frac,    // 水平权重
     input  wire                  valid_in,
     
@@ -607,7 +366,7 @@ module h_filter_4tap #(
     // 4-tap 水平插值（双三次）
     always @(posedge clk) begin
         if (ready) begin
-            // h_pix = bicubic_interp(shift_reg[0], shift_reg[1], shift_reg[2], shift_reg[3], dx_frac)
+            // h_pix = bicubic_interp(shift_reg[0..3], dx_frac)
             h_pix     <= #U_DLY calc_result;
             valid_out <= #U_DLY 1'b1;
         end else begin
@@ -617,42 +376,32 @@ module h_filter_4tap #(
 endmodule
 ```
 
-### 6.4 H-filter 与 L2 的连接
-
-```verilog
-// H-filter 从 L2 读取 VPix
-assign vpix_rd_addr = h_filter_x_cnt;  // H-filter 内部列计数
-assign vpix_rd_en   = h_filter_active;
-
-// 2 时钟延迟后 VPix 到达 H-filter
-// H-filter 处理...
-// 最终像素输出到 FIFO
-```
-
 ---
 
-## 7. 输出 FIFO（1 行缓冲）
+## 6. L2 输出 FIFO 设计
 
-### 7.1 功能需求
+### 6.1 功能定位
 
-- **输入**：H-filter 输出的最终像素流
-- **输出**：显示接口（o_valid/o_data/o_ready）
-- **作用**：吸收速率波动，确保显示连续性
+- **存储内容**：H-filter 输出的**最终像素**（不是 VPix）
+- **作用**：吸收 H-filter 输出速率波动，确保显示连续性
+- **深度**：1 行目标图像宽度（如 1920 或 3840）
+- **时钟域**：clk_out（与 H-filter 和显示接口同域）
 
-### 7.2 架构位置
+### 6.2 为什么需要 FIFO 而不是简单 RAM？
 
-```
-H-filter 输出 → Output FIFO → 显示接口
-                     ↓
-                1 行缓冲（目标图像宽度）
-```
+| 场景 | 说明 |
+|------|------|
+| **H-filter 输出不均匀** | 受 L1 数据就绪、坐标计算等影响，可能有抖动 |
+| **显示接口要求匀速** | `o_valid` 必须稳定，不能等待 |
+| **预填充策略** | 先写半行再开始读，防止 underrun |
 
-### 7.3 实现要点
+### 6.3 接口定义
 
 ```verilog
 module output_line_fifo #(
     parameter DATA_WIDTH = 8,
-    parameter MAX_WIDTH  = 4096
+    parameter MAX_WIDTH  = 4096,
+    parameter ADDR_WIDTH = $clog2(MAX_WIDTH)
 )(
     input  wire                  clk,
     input  wire                  rst_n,
@@ -669,64 +418,9 @@ module output_line_fifo #(
     output reg                   rd_line_start,
     output reg                   rd_line_done,
     output wire                  empty,
-    output wire                  full
-);
-    // 双缓冲或单缓冲 + 预填充策略
-    // ...
-endmodule
-```
-
-### 7.4 使用策略
-
-```verilog
-// 预填充策略：确保 FIFO 有至少半行数据后再开始输出
-localparam PRE_FILL_THRESHOLD = MAX_WIDTH / 2;
-
-assign o_valid = (fifo_cnt > PRE_FILL_THRESHOLD) ? !fifo_empty : 1'b0;
-
-// 或者用 ready 反压
-assign o_valid = !fifo_empty;
-assign h_filter_pause = fifo_full;  // FIFO 满则暂停 H-filter
-```
-
----
-
-## 8. 输出 FIFO（1 行缓冲）
-
-### 6.1 功能需求
-
-- **深度**：1 行目标图像宽度（如 1920 或 3840）
-- **宽度**：DATA_WIDTH（如 8/10/12bit）
-- **时钟域**：clk_out（与 H-filter 和显示接口同域）
-- **作用**：吸收速率波动，防止输入瞬态中断导致显示异常
-
-### 6.2 实现方案
-
-```verilog
-module output_line_fifo #(
-    parameter DATA_WIDTH = 8,
-    parameter MAX_WIDTH  = 3840
-)(
-    input  wire                  clk,
-    input  wire                  rst_n,
-    
-    // 写端口（H-filter输出）
-    input  wire                  wr_en,
-    input  wire [DATA_WIDTH-1:0] wr_data,
-    input  wire                  wr_line_start,
-    input  wire                  wr_line_end,
-    
-    // 读端口（显示接口）
-    input  wire                  rd_en,
-    output reg  [DATA_WIDTH-1:0] rd_data,
-    output reg                   rd_line_start,
-    output reg                   rd_line_end,
-    output wire                  empty,
     output wire                  full,
     output wire [ADDR_WIDTH:0]   fifo_cnt
 );
-    localparam ADDR_WIDTH = $clog2(MAX_WIDTH);
-    
     reg [DATA_WIDTH-1:0] fifo_mem [0:MAX_WIDTH-1];
     reg [ADDR_WIDTH-1:0] wr_ptr, rd_ptr;
     reg [ADDR_WIDTH:0]   fifo_cnt_reg;
@@ -743,7 +437,7 @@ module output_line_fifo #(
 endmodule
 ```
 
-### 6.3 使用策略
+### 6.4 使用策略
 
 ```verilog
 // 预填充策略：确保FIFO有至少半行数据后再开始输出
@@ -758,15 +452,14 @@ assign h_filter_en = !fifo_full;  // FIFO满则暂停H-filter
 
 ---
 
-## 9. 双时钟域同步
+## 7. 双时钟域同步
 
 ### 7.1 需要同步的信号
 
 | 信号 | 方向 | 说明 |
 |------|------|------|
-| buf_ready | clk_in → clk_out | 某行buffer已写满 |
-| buf_release | clk_out → clk_in | 某行buffer可覆盖 |
 | frame_start | clk_in → clk_out | 帧开始同步 |
+| v_min_src_row | clk_out → clk_in | V-filter窗口最小行号（驱动L1释放） |
 
 ### 7.2 脉冲同步器实现
 
@@ -783,7 +476,7 @@ module pulse_sync (
     reg [2:0] sync_reg;
     
     always @(posedge clk_out or negedge rst_n_out) begin
-        if (!rst_n_out)
+        if (rst_n_out == 1'b0)
             sync_reg <= 3'b000;
         else
             sync_reg <= {sync_reg[1:0], pulse_in};
@@ -795,7 +488,53 @@ endmodule
 
 ---
 
-## 10. 接口定义（双时钟域版本）
+## 8. 数据流时序详解
+
+```
+【输入阶段】
+T0-T2: DDR 依次写行0,1,2 到 L1 buf0,1,2
+       L1状态: buf0=行0, buf1=行1, buf2=行2
+
+【V-filter 开始计算 dst_y=0】
+假设 need_src_y = 0.25 → 需要 行0 + 行1
+
+时钟0: V-filter 读 L1
+       - buf0[0] (行0,列0)
+       - buf1[0] (行1,列0)
+       计算 VPix[0] = interp(行0[0], 行1[0], 0.25)
+       
+时钟1: VPix[0] 进入 H-filter shift_reg[0]
+       V-filter 计算 VPix[1] = interp(行0[1], 行1[1], 0.25)
+       
+时钟2: VPix[1] 进入 shift_reg[0], VPix[0] 移入 shift_reg[1]
+       H-filter 计算 h_pix[0]（第一个最终像素）
+       
+时钟3: h_pix[0] 写入 L2[0]
+
+...持续列计算...
+
+时钟N: V-filter 完成整行 VPix
+时钟N+2: H-filter 完成整行最终像素，全部写入 L2
+
+【输出阶段】
+L2 FIFO 预填充完成后，开始输出到显示接口
+
+【V-filter 计算 dst_y=1】
+假设 need_src_y = 0.75 → 仍需要 行0 + 行1
+继续读 buf0, buf1 的对应列...
+
+【V-filter 计算 dst_y=2】
+假设 need_src_y = 1.25 → 需要 行1 + 行2
+切换到读 buf1, buf2...
+
+【窗口滑动】
+当 need_src_y > 1（超过行1），行0 可释放
+v_min_src_row 同步到 clk_in，buf0 被复用写入新行...
+```
+
+---
+
+## 9. 接口定义（双时钟域版本）
 
 ```verilog
 module bilinear_scaler_vh #(
@@ -839,21 +578,22 @@ module bilinear_scaler_vh #(
 
 ---
 
-## 11. 性能指标
+## 10. 性能指标
 
 | 指标 | 数值 | 说明 |
 |------|------|------|
 | **输入延迟** | 3 行 | 3 行 buffer 攒满后开始输出 |
 | **流水线延迟** | 4~6 时钟 | V-filter(1) + H-filter(2) + FIFO(1~3) |
 | **吞吐率** | 1 像素/时钟 | 满吞吐率运行 |
-| **Buffer需求** | 3 行(L1) + 2 行(L2) + 1 行(FIFO) | 共6行存储 |
+| **Buffer需求** | **4 行** | 3 行(L1) + 1 行(L2 FIFO) |
+| **VPix存储** | 0 行 | 用寄存器流水线，不进RAM |
 | **支持缩放** | 任意比例 | 0.25x ~ 4x（取决于系数精度） |
 | **支持算法** | 双线性/双三次 | 双线性(2-tap)，双三次(4-tap) |
-| **L1 管理** | 3-Buffer 轮转 | 1r0w 状态，V-filter 窗口驱动释放 |
+| **L1 管理** | 3-Buffer 轮转 | busy_num + line_id，V-filter窗口驱动释放 |
 
 ---
 
-## 12. 验证要点
+## 11. 验证要点
 
 ### L1 3-Buffer 验证
 1. **Buffer 轮转**：验证 sel 循环 0->1->2->0，busy_num 0->3 后保持
@@ -862,32 +602,43 @@ module bilinear_scaler_vh #(
 4. **释放条件**：验证 `buf_line_id < v_min_src_row` 时才可释放
 5. **i_ready 反压**：busy_num<3 时无条件可写；busy_num==3 时需等待释放
 
-### V-filter 窗口验证
-6. **放大场景**：验证源行被多次复用（v_min_src_row 前进慢）
-7. **缩小场景**：验证源行快速释放（v_min_src_row 前进快）
-8. **跨时钟域同步**：验证 v_min_src_row 正确同步到 clk_in 域
+### V-filter 与 H-filter 验证
+6. **VPix 流水线**：验证 V-filter 输出直接进 H-filter 移位寄存器，**不进 RAM**
+7. **移位寄存器**：验证 H-filter 2-tap/4-tap 移位寄存器正确移位
+8. **L2 最终结果**：验证 H-filter 输出（最终像素）正确写入 L2 FIFO
+
+### 窗口管理验证
+9. **放大场景**：验证源行被多次复用（v_min_src_row 前进慢）
+10. **缩小场景**：验证源行快速释放（v_min_src_row 前进快）
+11. **跨时钟域同步**：验证 v_min_src_row 正确同步到 clk_in 域
 
 ### 整体验证
-9. **帧开始复位**：验证 frame_start 时所有状态清零
-10. **FIFO边界**：验证 FIFO 满/空时数据流正确反压
-11. **行同步**：验证 o_last/o_frame_start 时序正确
-12. **数据完整性**：验证缩放前后图像内容正确（与软件golden对比）
+12. **帧开始复位**：验证 frame_start 时所有状态清零
+13. **FIFO边界**：验证 FIFO 满/空时数据流正确反压
+14. **行同步**：验证 o_last/o_frame_start 时序正确
+15. **数据完整性**：验证缩放前后图像内容正确（与软件golden对比）
 
 ---
 
-## 13. 与PG231对比
+## 12. 与PG231对比
 
 | 特性 | PG231 (V+H) | 本设计 |
 |------|-------------|--------|
 | 架构 | V+H分离 | V+H分离 ✓ |
-| 输入Buffer | 4行 | 4行 ✓ |
-| 输出FIFO | 有 | 有 ✓ |
+| 输入Buffer | 4行 | **3行**（2行运算+1行预缓冲） |
+| VPix缓冲 | 1行 | **0行**（VPix直接进H-filter移位寄存器） |
+| 输出缓冲 | 1行 | 1行 ✓ |
 | 双时钟域 | 支持 | 支持 ✓ |
+| 总存储 | 6行 | **4行** |
 | 可配置tap数 | 6/8/10/12 | 4（双三次）/2（双线性） |
-| 系数表 | 内置64-phase | 可配置 |
 
-**本设计**完全遵循PG231的V+H架构思想，针对双线性/双三次插值进行了优化。
+**本设计优化**：
+- **3-Buffer L1**：比PG231少1行缓冲，更省资源
+- **VPix不进RAM**：直接用移位寄存器处理，减少1行存储
+- **总存储**：4行（L1:3 + L2:1），比PG231节省 33%
 
 ---
 
-**下一步**：开始RTL编码实现？
+**版本历史**：
+- v1.0 - 初始版本（基于PG231 V+H架构）
+- v1.1 - 修正：合并L2/L3为单级输出FIFO，明确VPix不进RAM
