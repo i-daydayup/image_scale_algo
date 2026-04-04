@@ -437,6 +437,39 @@ project/
   - ⚠️ **特别注意**：`if-else` 分支内的赋值也要加 `#U_DLY`
   - ✅ 推荐写法：`sig <= #U_DLY value;`（先写延时占位）
   - ❌ 错误写法：`sig <= value;`（后补容易遗漏）
+- [ ] **Always 块分离原则（逻辑条件分组）**
+  - ✅ 推荐：**处理逻辑条件相同的信号放在同一 always 块**
+  - ✅ 推荐：**处理逻辑条件不同的信号分开写**
+  - 示例：地址计数器（每个周期+1）和 buffer 选择（仅i_last时变化）应分开
+  ```verilog
+  // ✅ 正确：分开写，逻辑清晰
+  always @(posedge clk) if (en) counter <= #U_DLY counter + 1;
+  always @(posedge clk) if (en && last) buf_sel <= #U_DLY next_sel;
+  
+  // ❌ 错误：混在一起，条件判断复杂
+  always @(posedge clk) if (en) begin
+      counter <= #U_DLY counter + 1;
+      if (last) buf_sel <= #U_DLY next_sel;  // 条件不同！
+  end
+  ```
+- [ ] **begin/end 精简原则**
+  - ✅ 推荐：**单行赋值省略 begin/end**，代码更简洁
+  - ❌ 避免：单行逻辑也加 begin/end，显得冗余
+  ```verilog
+  // ✅ 正确：单行省略 begin/end
+  if (rst_n == 1'b0)
+      sel <= 2'd0;
+  else if (condition)
+      sel <= #U_DLY next_sel;
+      
+  // ❌ 冗余：单行也加 begin/end
+  if (rst_n == 1'b0) begin
+      sel <= 2'd0;
+  end
+  else if (condition) begin
+      sel <= #U_DLY next_sel;
+  end
+  ```
 - [ ] **信号声明和赋值分开写**
   - ✅ 推荐：`wire sig;` + `assign sig = ...;`
   - ❌ 不推荐：`wire sig = ...;`

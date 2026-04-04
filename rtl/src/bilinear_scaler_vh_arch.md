@@ -7,8 +7,9 @@
 ### 1.1 核心特性
 
 - **V+H 分离**：V-filter（异行同列）→ H-filter（同行异列）
-- **流式处理**：第 4 行输入时即可开始输出
+- **流式处理**：3 行输入后即可开始输出（双线性只需 2 行，第 3 行预缓冲）
 - **双时钟域**：`clk_in`（输入/DDR）+ `clk_out`（输出/显示）
+- **3-Buffer L1**：3 行输入缓冲，V-filter 滑动窗口管理
 - **输出缓冲**：1 行 FIFO 吸收速率波动，防止显示 underrun
 
 ### 1.2 架构框图
@@ -20,16 +21,16 @@
 │  clk_in domain                              clk_out domain                      │
 │  ┌─────────────────────┐                   ┌─────────────────────┐              │
 │  │   Input Buffer      │                   │   Output FIFO       │              │
-│  │   (4-Line Ring)     │                   │   (1-Line Buffer)   │              │
+│  │   (3-Buffer Ring)   │                   │   (1-Line Buffer)   │              │
 │  │                     │                   │                     │              │
 │  │  ┌─────┐ ┌─────┐   │   Async FIFO      │  ┌─────────────┐   │              │
-│  │  │Line0│ │Line1│   │   (Status Sync)   │  │  1-Line     │   │              │
-│  │  │(v0) │ │(v1) │   │◄─────────────────►│  │  Buffer     │   │              │
+│  │  │Buf0 │ │Buf1 │   │   (Status Sync)   │  │  1-Line     │   │              │
+│  │  │(0/1)│ │(0/1)│   │◄─────────────────►│  │  Buffer     │   │              │
 │  │  └─────┘ └─────┘   │                   │  │  (3840x8b)  │   │              │
-│  │  ┌─────┐ ┌─────┐   │                   │  └──────┬──────┘   │              │
-│  │  │Line2│ │Line3│   │                   │         │          │              │
-│  │  │(v2) │ │(v3) │   │                   │    o_valid/o_ready  │              │
-│  │  └─────┘ └─────┘   │                   │         │          │              │
+│  │  ┌─────┐           │                   │  └──────┬──────┘   │              │
+│  │  │Buf2 │           │                   │         │          │              │
+│  │  │(0/1)│           │                   │    o_valid/o_ready  │              │
+│  │  └─────┘           │                   │         │          │              │
 │  └──────────┬──────────┘                   └─────────┼──────────┘              │
 │             │                                        │                         │
 │             ▼                                        ▼                         │
@@ -57,120 +58,167 @@
 
 | 层级 | 数量 | 作用 | 实现方式 |
 |------|------|------|----------|
-| **L1: 输入缓冲** | **2 行** | DDR 预缓冲，提高突发效率 | line_buffer_2row_wrapper |
-| **L2: V-filter 缓冲** | **4 行** | 垂直插值运算 | scaler 内部 4-line ring |
+| **L1: 输入缓冲** | **3 行** | DDR 预缓冲，V-filter滑动窗口 | line_buffer_wrapper ×3 |
+| **L2: V-filter 缓冲** | **2 行** | 垂直插值运算（双线性） | scaler 内部 2-line |
 | **L3: 输出 FIFO** | **1 行** | 显示连续性 | output_line_fifo |
 
-**总存储需求：7 行 × src_width × DATA_WIDTH**
+**总存储需求：6 行 × src_width × DATA_WIDTH**
 
-### 2.2 L1 输入缓冲设计（Wrapper 封装）
+**关键改进**：
+- **3-Buffer L1**：支持 V-filter 滑动窗口（2行运算+1行预缓冲）
+- **1r0w 状态管理**：每个 buffer 独立标记可读(1)/可写(0)
+- **动态释放**：根据 V-filter 窗口位置 (`v_min_src_row`) 决定释放时机
+
+### 2.2 L1 输入缓冲设计（3-Buffer 架构）
 
 #### 设计原则
 
+- **3-Buffer 轮转**：支持 V-filter 滑动窗口（2行运算 + 1行预缓冲）
+- **1r0w 状态管理**：1=可读，0=可写，避免多 buffer 同时可写的歧义
 - **器件无关**：通过 wrapper 封装，内部可用 Generic RAM、Xilinx BRAM、Lattice EBR 等
 - **时序收敛**：wrapper 内部对输入/输出打拍，上层模块无需关心时序细节
-- **单元测试**：wrapper 可单独仿真验证，确保跨器件迁移时只需测试 wrapper
 
-#### 模块接口
+#### 核心信号定义
 
 ```verilog
-module line_buffer_2row_wrapper #(
+// L1 写控制（clk_in 域）
+reg  [1:0]  l1_wr_buf_sel;       // 写buffer选择: 0/1/2 循环
+reg  [1:0]  l1_buf_busy_num;     // 已占用buffer数: 0/1/2/3
+reg  [15:0] in_row_idx;          // 输入行计数器（0开始）
+reg  [15:0] l1_buf0_line_id;     // buffer0存储的源行号
+reg  [15:0] l1_buf1_line_id;     // buffer1存储的源行号
+reg  [15:0] l1_buf2_line_id;     // buffer2存储的源行号
+
+// datacnt：每个buffer当前存储的数据计数（读时钟域可见）
+wire [ADDR_WIDTH:0] l1_buf0_datacnt;
+wire [ADDR_WIDTH:0] l1_buf1_datacnt;
+wire [ADDR_WIDTH:0] l1_buf2_datacnt;
+```
+
+#### i_ready 反压逻辑
+
+```verilog
+// i_ready：busy_num < 3 时无条件可写；busy_num == 3 时需判断可释放
+assign i_ready = (l1_buf_busy_num < 2'd3) || buf_can_release;
+
+// 判断当前选中的buffer是否可以释放（busy_num==3时）
+assign buf_can_release = 
+    (l1_buf_busy_num == 2'd3) && v_min_src_row_update &&
+    ((l1_wr_buf_sel == 2'd0 && l1_buf0_line_id < v_min_src_row_synced) ||
+     (l1_wr_buf_sel == 2'd1 && l1_buf1_line_id < v_min_src_row_synced) ||
+     (l1_wr_buf_sel == 2'd2 && l1_buf2_line_id < v_min_src_row_synced));
+```
+
+#### 3-Buffer 状态机（写侧）
+
+```verilog
+// sel 循环：0 -> 1 -> 2 -> 0
+// busy_num：0 -> 1 -> 2 -> 3（饱和）
+
+// 初始状态（复位/帧开始）
+sel = 0, busy_num = 0
+
+// 写行0：i_last 时 sel->1, busy_num->1
+// 写行1：i_last 时 sel->2, busy_num->2  
+// 写行2：i_last 时 sel->0, busy_num->3（满）
+
+// busy_num == 3 后，需要等待 V-filter 释放
+// 当 v_min_src_row > buf0_line_id 时，buf0 可释放
+// 写行3：覆盖 buf0，sel->1, busy_num 保持 3
+```
+
+#### 完整时间线验证
+
+| 阶段 | sel | busy_num | buf0 | buf1 | buf2 | 操作 |
+|------|-----|----------|------|------|------|------|
+| 初始 | 0 | 0 | 空 | 空 | 空 | 写buf0，busy_num=0<3，直接写 |
+| 写完行0 | 1 | 1 | 满(行0) | 空 | 空 | 写buf1，busy_num=1<3，直接写 |
+| 写完行1 | 2 | 2 | 满(行0) | 满(行1) | 空 | 写buf2，busy_num=2<3，直接写 |
+| 写完行2 | 0 | 3 | 满(行0) | 满(行1) | 满(行2) | busy_num=3，判断buf0是否可释放（行0 < v_min_src_row?），若可释放则写buf0覆盖 |
+| 释放行0写行3 | 1 | 3 | 满(行3) | 满(行1) | 满(行2) | busy_num=3，判断buf1是否可释放（行1 < v_min_src_row?），若可释放则写buf1覆盖 |
+| 释放行1写行4 | 2 | 3 | 满(行3) | 满(行4) | 满(行2) | busy_num=3，判断buf2是否可释放（行2 < v_min_src_row?），若可释放则写buf2覆盖 |
+
+**关键观察**：
+- `busy_num` 从 0 递增到 3 后保持饱和
+- `sel` 始终指向**最老的** buffer（待写入/覆盖）
+- 写前必须判断：`buf_line_id < v_min_src_row`（该行已不在 V-filter 窗口内）
+
+#### 模块接口（line_buffer_wrapper）
+
+```verilog
+module line_buffer_wrapper #(
     parameter DATA_WIDTH = 8,
     parameter MAX_WIDTH  = 4096,
     parameter ADDR_WIDTH = $clog2(MAX_WIDTH),
-    parameter VENDOR     = "GENERIC"  // "GENERIC", "XILINX", "LATTICE"
+    parameter VENDOR     = "GENERIC"
 )(
     input  wire                  clk,
     input  wire                  rst_n,
     
     // 写端口（DDR 输入）
-    input  wire                  wr_valid,
+    input  wire                  wr_en,
     input  wire [ADDR_WIDTH-1:0] wr_addr,
     input  wire [DATA_WIDTH-1:0] wr_data,
-    input  wire                  wr_last,
-    output wire                  wr_ready,      // 反压信号
+    output wire                  wr_full,
     
     // 读端口（V-filter 消费）
-    input  wire                  rd_valid,
+    input  wire                  rd_en,
     input  wire [ADDR_WIDTH-1:0] rd_addr,
-    output reg  [DATA_WIDTH-1:0] rd_data,       // 内部打拍输出
-    output wire                  rd_data_valid, // 输出有效指示
-    input  wire                  rd_switch,     // 切换 buffer（读完一行）
-    output wire [1:0]            buf_status     // 00=空, 01=满1, 10=满2, 11=全满
+    output reg  [DATA_WIDTH-1:0] rd_data,
+    output reg                   rd_data_valid,
+    
+    // 数据计数（读时钟域可见，用于判断buffer是否可读满）
+    output wire [ADDR_WIDTH:0]   datacnt
 );
 ```
 
-#### 内部时序打拍设计
+#### 5 个独立的 Always 块
 
 ```verilog
-// wrapper 内部实现：输入/输出各打一拍，方便时序收敛
-
-// 输入打拍（消除外部输入 setup time 压力）
-reg                  wr_valid_d1;
-reg [ADDR_WIDTH-1:0] wr_addr_d1;
-reg [DATA_WIDTH-1:0] wr_data_d1;
-
-always @(posedge clk) begin
-    wr_valid_d1 <= wr_valid;
-    wr_addr_d1  <= wr_addr;
-    wr_data_d1  <= wr_data;
+// 1. 写地址计数器（复位或正常写入递增）
+always @(posedge clk_in) begin
+    if (i_valid && i_ready)
+        if (i_last) l1_wr_addr_cnt <= 0;
+        else        l1_wr_addr_cnt <= l1_wr_addr_cnt + 1;
 end
 
-// RAM 核心（根据 VENDOR 选择实现）
-// ... （generic/xilinx/lattice 实现）
-
-// 输出打拍（改善输出时钟到 clock out 的延迟）
-reg [DATA_WIDTH-1:0] rd_data_raw;
-
-always @(posedge clk) begin
-    if (rd_valid)
-        rd_data_raw <= mem[rd_addr];  // 组合逻辑读或同步读
+// 2. 输入行计数器（i_last 时 +1）
+always @(posedge clk_in) begin
+    if (i_frame_start)      in_row_idx <= 0;
+    else if (i_last)        in_row_idx <= in_row_idx + 1;
 end
 
-always @(posedge clk) begin
-    rd_data <= rd_data_raw;  // 再打一拍输出
+// 3. Buffer 选择（0->1->2->0 循环）
+always @(posedge clk_in) begin
+    if (i_frame_start)      l1_wr_buf_sel <= 0;
+    else if (i_last && i_ready) l1_wr_buf_sel <= l1_wr_buf_sel + 1;
 end
 
-assign rd_data_valid = 1'b1;  // 或根据实际延迟调整
-```
-
-#### 2 行 Ping-Pong 控制
-
-```verilog
-// 内部状态机控制 2 行 buffer 的切换
-localparam BUF_EMPTY = 2'b00;
-localparam BUF_HALF  = 2'b01;  // 1行满
-localparam BUF_FULL  = 2'b10;  // 2行满
-
-reg [1:0] buf_state;
-reg       wr_buf_sel;  // 当前写入的 buffer（0 或 1）
-reg       rd_buf_sel;  // 当前读取的 buffer（0 或 1）
-
-// 写满一行后切换
-always @(posedge clk) begin
-    if (wr_last && wr_valid_d1) begin
-        wr_buf_sel <= ~wr_buf_sel;
-        // 标记当前 buffer 已满
-    end
+// 4. Busy 计数器（0->1->2->3 饱和）
+always @(posedge clk_in) begin
+    if (i_frame_start)      l1_buf_busy_num <= 0;
+    else if (i_last && i_ready && busy_num < 3)
+                            l1_buf_busy_num <= l1_buf_busy_num + 1;
 end
 
-// 读完后切换（由外部 rd_switch 控制）
-always @(posedge clk) begin
-    if (rd_switch)
-        rd_buf_sel <= ~rd_buf_sel;
+// 5. 行号记录（i_last 时记录 in_row_idx）
+always @(posedge clk_in) begin
+    if (i_last && i_ready)
+        case (l1_wr_buf_sel)
+            0: l1_buf0_line_id <= in_row_idx;
+            1: l1_buf1_line_id <= in_row_idx;
+            2: l1_buf2_line_id <= in_row_idx;
+        endcase
 end
-
-// 反压控制：只有当两个 buffer 都满时才反压 DDR
-assign wr_ready = (buf_state != BUF_FULL);
 ```
 
 #### 单元测试策略
 
-wrapper 单独测试，确保：
-1. **写满一行后自动切换**：验证 ping-pong 逻辑
-2. **读写完切换**：验证 rd_switch 功能
-3. **反压时序**：验证 wr_ready 在满时拉低
-4. **跨时钟域**（如果是双口 RAM）：验证异步读写
+1. **3-Buffer 轮转**：验证 sel 循环 0->1->2->0
+2. **busy_num 饱和**：验证从 0->3 后保持 3
+3. **v_min_src_row 释放**：模拟 V-filter 释放信号，验证覆盖逻辑
+4. **datacnt 同步**：验证写时钟域的 datacnt 能正确反映到读侧
+5. **帧开始复位**：验证 frame_start 时所有状态清零
 
 ### 2.3 L2 V-filter 缓冲设计
 
@@ -188,92 +236,98 @@ wrapper 单独测试，确保：
 
 | 阶段 | 操作 | 延迟 | 说明 |
 |------|------|------|------|
-| **Stage 1** | DDR 写入 L1 缓冲 | 2 行时间 | 2 行 ping-pong 预缓冲 |
-| **Stage 2** | L1 → L2 传输 | 1 行时间 | 读入 V-filter 4 行缓冲 |
+| **Stage 1** | DDR 写入 L1 缓冲 | 3 行时间 | 3 行 buffer 攒满 |
+| **Stage 2** | L1 → L2 传输 | - | 按需读取 L1 buffer 到 L2 |
 | **Stage 3** | V-filter | 1 时钟/列 | 异行同列，输出 VPix |
 | **Stage 4** | H-filter | 1 时钟/像素 | 同行异列，输出最终像素 |
 | **Stage 5** | 输出 FIFO | 1~N 时钟 | 缓冲 1 行，确保显示连续性 |
 
-### 3.2 详细时序（前 10 行）
+**关键改进**：
+- **3-Buffer L1**：支持动态释放，V-filter 窗口滑动时自动复用最老的行
+- **datacnt 驱动**：根据 datacnt 判断 L1 buffer 是否可读满
+
+### 3.2 详细时序（3-Buffer L1 工作示例）
 
 ```
-T0: DDR 突发写行1 → L1 buffer0（输入 wrapper）
-    L1状态: [buf0=行1, buf1=空]
-    L2(V-filter): [v0~v3=空]
+T0: DDR 写行0 → L1 buf0
+    L1状态: sel=0, busy_num=1, buf0=行0(可读), buf1=空, buf2=空
+    i_ready=1 (busy_num < 3)
 
-T1: DDR 突发写行2 → L1 buffer1
-    L1状态: [buf0=行1, buf1=行2]
-    【2行齐备，开始 transfer】
-    
-    Transfer: L1 buf0 → L2 v0
-    （逐列读取，L1 输出打拍保证时序）
+T1: DDR 写行1 → L1 buf1
+    L1状态: sel=1, busy_num=2, buf0=行0, buf1=行1(可读), buf2=空
+    i_ready=1 (busy_num < 3)
 
-T2: DDR 突发写行3 → L1 buffer0（覆盖，因为行1已 transfer 完）
-    Transfer: L1 buf1 → L2 v1
+T2: DDR 写行2 → L1 buf2
+    L1状态: sel=0, busy_num=3, buf0=行0, buf1=行1, buf2=行2(可读)
+    i_ready=0 (busy_num == 3, 等待V-filter释放)
+    【3行齐全，V-filter可开始】
 
-T3: DDR 突发写行4 → L1 buffer1
-    Transfer: L1 buf0 → L2 v2
+T3: V-filter 窗口: 需要行0+行1
+    v_min_src_row = 0（窗口底边）
+    buf0_line_id=0 >= v_min_src_row，不可释放
+    i_ready 保持 0
 
-T4: DDR 突发写行5 → L1 buffer0
-    Transfer: L1 buf1 → L2 v3
-    【L2 4行齐全，开始 V-filter】
-    
-    V-filter开始：读 v0[0],v1[0],v2[0],v3[0] → VPix[0]
-    H-filter：VPix 进入移位寄存器
-    ...
-    
-T5: DDR 写行6 → L1
-    Transfer 行6 → v0（覆盖已用完的行1）
-    V-filter: 读 v1,v2,v3,v0(新) → 下一行 VPix
-    
-...持续流水线
+T4: V-filter 窗口滑动到: 行1+行2
+    v_min_src_row = 1
+    buf0_line_id=0 < v_min_src_row，可释放！
+    v_min_src_row_update 脉冲同步到 clk_in
+    i_ready=1, buf_can_release=1
+
+T5: DDR 写行3 → L1 buf0（覆盖行0）
+    L1状态: sel=1, busy_num=3, buf0=行3(可读), buf1=行1, buf2=行2
+    i_ready=0 (busy_num == 3)
+
+T6: V-filter 窗口滑动到: 行2+行3
+    v_min_src_row = 2
+    buf1_line_id=1 < v_min_src_row，可释放
+    i_ready=1
+
+T7: DDR 写行4 → L1 buf1（覆盖行1）
+    L1状态: sel=2, busy_num=3, buf0=行3, buf1=行4, buf2=行2
+    ...持续轮转
 ```
 
-### 2.2 详细时序（前 10 行）
+**关键观察**：
+- busy_num 达到 3 后保持饱和
+- sel 循环 0->1->2->0，始终指向**最老的** buffer（待释放）
+- 释放条件：`buf_line_id < v_min_src_row`
+
+### 3.3 L1 Buffer 与 V-filter 协作时序
 
 ```
-T0: 行1 → Buffer v0（第1行源数据）
-    Buffer状态: [v0=行1, v1=空, v2=空, v3=空]
-    输出: 无（攒行中）
+L1 Buffer 状态演变（3-buffer 轮转）：
 
-T1: 行2 → Buffer v1
-    Buffer状态: [v0=行1, v1=行2, v2=空, v3=空]
-    输出: 无
+初始: [buf0=空, buf1=空, buf2=空], sel=0, busy=0
 
-T2: 行3 → Buffer v2
-    Buffer状态: [v0=行1, v1=行2, v2=行3, v3=空]
-    输出: 无
+写行0: [buf0=行0(1), buf1=空, buf2=空], sel=1, busy=1
+       └─ sel 指向当前可写的 buffer
+       
+写行1: [buf0=行0(1), buf1=行1(1), buf2=空], sel=2, busy=2
+       
+写行2: [buf0=行0(1), buf1=行1(1), buf2=行2(1)], sel=0, busy=3
+       【全满，等待 V-filter 释放】
 
-T3: 行4 → Buffer v3
-    Buffer状态: [v0=行1, v1=行2, v2=行3, v3=行4]
-    【4行齐全，开始流水线】
-    
-    V-filter开始（第0列）:
-    - 读 v0[0], v1[0], v2[0], v3[0]（异行同列）
-    - 计算 VPix[0]
-    - H-filter: VPix进入4-tap移位寄存器
-    
-    （继续第1列...第3列）
-    - VPix[1], VPix[2], VPix[3] 进入移位寄存器
-    - H-filter: 凑齐4个VPix，输出第0个像素 → 写入Output FIFO
+V-filter 窗口 [行0, 行1]: v_min_src_row = 0
+              行0 >= 0，不可释放，i_ready=0
 
-T3~T4: 持续运算
-    - 每时钟：V-filter输出1个VPix
-    - H-filter每时钟输出1个像素（延迟3时钟后）
-    
-T4: 行5 → Buffer v0（覆盖行1，因为行1已用完）
-    Buffer状态: [v0=行5, v1=行2, v2=行3, v3=行4]
-    
-    V-filter（下一目标行）:
-    - 读 v1[0], v2[0], v3[0], v0[0]（新行5的第0列）
-    - 计算下一行VPix[0]
-    
-    H-filter继续输出上一行剩余像素...
+V-filter 窗口 [行1, 行2]: v_min_src_row = 1
+              行0 < 1，可释放 buf0！
+              
+写行3: [buf0=行3(1), buf1=行1(1), buf2=行2(1)], sel=1, busy=3
+       【覆盖行0，buf0 被复用】
 
-T5~T9: 循环使用 v0~v3
-    Buffer轮转: v1→v2→v3→v0→v1...
-    每来1行新数据，覆盖最旧的1行
+V-filter 窗口 [行2, 行3]: v_min_src_row = 2
+              行1 < 2，可释放 buf1
+              
+写行4: [buf0=行3(1), buf1=行4(1), buf2=行2(1)], sel=2, busy=3
+
+...持续轮转，始终维持 3 行有效数据
 ```
+
+**关键逻辑**：
+1. `sel` 始终指向**最老的** buffer（待写入/覆盖）
+2. `busy_num == 3` 时，需要等待 V-filter 窗口滑动才能释放
+3. 释放条件：`buf_line_id < v_min_src_row`（该行已不在 V-filter 窗口内）
 
 ---
 
@@ -669,23 +723,35 @@ module bilinear_scaler_vh #(
 
 | 指标 | 数值 | 说明 |
 |------|------|------|
-| **输入延迟** | 4 行 | 攒够4行才能开始输出 |
-| **流水线延迟** | 6~8 时钟 | V-filter(1) + H-filter(4) + FIFO(1~3) |
+| **输入延迟** | 3 行 | 3 行 buffer 攒满后开始输出 |
+| **流水线延迟** | 4~6 时钟 | V-filter(1) + H-filter(2) + FIFO(1~3) |
 | **吞吐率** | 1 像素/时钟 | 满吞吐率运行 |
-| **Buffer需求** | 4 行 + 1 行 FIFO | 共5行存储 |
+| **Buffer需求** | 3 行(L1) + 2 行(L2) + 1 行(FIFO) | 共6行存储 |
 | **支持缩放** | 任意比例 | 0.25x ~ 4x（取决于系数精度） |
-| **支持算法** | 双线性/双三次 | 通过tap数和系数配置 |
+| **支持算法** | 双线性/双三次 | 双线性(2-tap)，双三次(4-tap) |
+| **L1 管理** | 3-Buffer 轮转 | 1r0w 状态，V-filter 窗口驱动释放 |
 
 ---
 
 ## 12. 验证要点
 
-1. **Buffer轮转**：验证4行buffer正确循环使用，无覆盖错误
-2. **放大场景**：验证源行被多次复用后才释放
-3. **缩小场景**：验证源行快速释放，无资源泄漏
-4. **跨时钟域**：验证双时钟域同步无亚稳态
-5. **FIFO边界**：验证FIFO满/空时数据流正确反压
-6. **行同步**：验证o_last/o_frame_start时序正确
+### L1 3-Buffer 验证
+1. **Buffer 轮转**：验证 sel 循环 0->1->2->0，busy_num 0->3 后保持
+2. **行号记录**：验证 i_last 时正确记录 in_row_idx 到对应 buffer
+3. **datacnt 同步**：验证写时钟域 datacnt 正确反映到读侧
+4. **释放条件**：验证 `buf_line_id < v_min_src_row` 时才可释放
+5. **i_ready 反压**：busy_num<3 时无条件可写；busy_num==3 时需等待释放
+
+### V-filter 窗口验证
+6. **放大场景**：验证源行被多次复用（v_min_src_row 前进慢）
+7. **缩小场景**：验证源行快速释放（v_min_src_row 前进快）
+8. **跨时钟域同步**：验证 v_min_src_row 正确同步到 clk_in 域
+
+### 整体验证
+9. **帧开始复位**：验证 frame_start 时所有状态清零
+10. **FIFO边界**：验证 FIFO 满/空时数据流正确反压
+11. **行同步**：验证 o_last/o_frame_start 时序正确
+12. **数据完整性**：验证缩放前后图像内容正确（与软件golden对比）
 
 ---
 

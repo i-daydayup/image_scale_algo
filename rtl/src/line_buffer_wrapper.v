@@ -40,8 +40,9 @@ module line_buffer_wrapper #(
 	//------------------------------------------------------------------------
 	input  wire                  rd_en          ,//I1,读使能
 	input  wire [ADDR_WIDTH-1:0] rd_addr        ,//Ix,读地址
-	output reg  [DATA_WIDTH-1:0] rd_data         ,//Ox,读数据（打拍输出）
-	output reg                   rd_data_valid   //O1,读数据有效
+	output reg  [DATA_WIDTH-1:0] rd_data        ,//Ox,读数据（打拍输出）
+	output reg                   rd_data_valid  ,//O1,读数据有效
+	output wire [ADDR_WIDTH:0]   datacnt         //Ox+1,当前写入的数据计数（读时钟域可见）
 );
 
 	//------------------------------------------------------------------------

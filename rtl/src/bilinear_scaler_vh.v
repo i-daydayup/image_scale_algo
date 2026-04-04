@@ -133,35 +133,58 @@ module bilinear_scaler_vh #(
 	//========================================================================
 	// 第2部分：L1 输入缓冲（2行Wrapper，上层实现ping-pong）
 	//========================================================================
-	// 实例化2个单行buffer，上层控制切换
+	// 实例化3个单行buffer，1r0w状态管理（1=可读，0=可写）
 	
 	// L1 写控制（clk_in域）
-	reg  [ADDR_WIDTH-1:0] l1_wr_addr_cnt    ;// 写地址计数
-	reg                   l1_wr_buf_sel     ;// 写buffer选择(0/1)
-	wire                  l1_buf0_wr_full   ;// buffer0将满（来自wrapper）
-	wire                  l1_buf1_wr_full   ;// buffer1将满（来自wrapper）
-	reg                   l1_wr_buf0_full   ;// buffer0写满标志（锁存）
-	reg                   l1_wr_buf1_full   ;// buffer1写满标志（锁存）
+	reg  [ADDR_WIDTH-1:0] l1_wr_addr_cnt     ;// 写地址计数
+	reg  [1:0]            l1_wr_buf_sel      ;// 写buffer选择: 0/1/2 循环
+	reg  [1:0]            l1_buf_busy_num    ;// 已占用的buffer数量: 0/1/2/3
+	reg  [15:0]           in_row_idx         ;// 输入行计数器（0开始）
+	reg  [15:0]           l1_buf0_line_id    ;// buffer0存储的行号
+	reg  [15:0]           l1_buf1_line_id    ;// buffer1存储的行号
+	reg  [15:0]           l1_buf2_line_id    ;// buffer2存储的行号
 	
 	// L1 读控制（clk_out域）
-	reg  [ADDR_WIDTH-1:0] l1_rd_addr       ;// 读地址
-	reg                   l1_rd_buf_sel    ;// 读buffer选择(0/1)
-	reg                   l1_rd_switch     ;// 读buffer切换脉冲
-	wire [1:0]            l1_buf_status    ;// buffer状态 {buf1_full, buf0_full}
-	wire [DATA_WIDTH-1:0] l1_rd_data_0     ;// buffer0读数据
-	wire [DATA_WIDTH-1:0] l1_rd_data_1     ;// buffer1读数据
-	wire                  l1_rd_data_0_valid;// buffer0读有效
-	wire                  l1_rd_data_1_valid;// buffer1读有效
-	reg  [DATA_WIDTH-1:0] l1_rd_data       ;// 选择后的读数据
-	reg                   l1_rd_data_valid ;// 选择后的读有效
+	reg  [ADDR_WIDTH-1:0] l1_rd_addr         ;// 读地址
+	reg  [1:0]            l1_rd_buf_sel      ;// 读buffer选择(0/1/2)
+	reg                   l1_rd_switch       ;// 读buffer切换脉冲
+	wire [DATA_WIDTH-1:0] l1_rd_data_0       ;// buffer0读数据
+	wire [DATA_WIDTH-1:0] l1_rd_data_1       ;// buffer1读数据
+	wire [DATA_WIDTH-1:0] l1_rd_data_2       ;// buffer2读数据
+	wire                  l1_rd_data_0_valid ;// buffer0读有效
+	wire                  l1_rd_data_1_valid ;// buffer1读有效
+	wire                  l1_rd_data_2_valid ;// buffer2读有效
+	reg  [DATA_WIDTH-1:0] l1_rd_data         ;// 选择后的读数据
+	reg                   l1_rd_data_valid   ;// 选择后的读有效
 	
-	// L1 buffer写使能（提前生成，不写在接口上）
-	wire l1_buf0_wr_en;
-	wire l1_buf1_wr_en;
+	// L1 buffer datacnt（读时钟域可见）
+	wire [ADDR_WIDTH:0]   l1_buf0_datacnt    ;// buffer0数据计数
+	wire [ADDR_WIDTH:0]   l1_buf1_datacnt    ;// buffer1数据计数
+	wire [ADDR_WIDTH:0]   l1_buf2_datacnt    ;// buffer2数据计数
 	
-	assign l1_buf0_wr_en = i_valid & i_ready & ~l1_wr_buf_sel;
-	assign l1_buf1_wr_en = i_valid & i_ready & l1_wr_buf_sel;
-	assign l1_buf_status = {l1_wr_buf1_full, l1_wr_buf0_full};
+	// v_min_src_row 从clk_out同步到clk_in（跨时钟域）
+	reg                   v_min_src_row_toggle_out;
+	reg  [2:0]            v_min_src_row_sync_reg;
+	wire                  v_min_src_row_update;
+	reg  [15:0]           v_min_src_row_synced;
+	
+	// 判断当前选中的buffer是否可以释放（busy_num==3时）
+	wire                  buf_can_release;
+	
+	// L1 buffer写使能
+	wire l1_buf0_wr_en = i_valid & i_ready & (l1_wr_buf_sel == 2'd0);
+	wire l1_buf1_wr_en = i_valid & i_ready & (l1_wr_buf_sel == 2'd1);
+	wire l1_buf2_wr_en = i_valid & i_ready & (l1_wr_buf_sel == 2'd2);
+	
+	// i_ready：busy_num < 3 时无条件可写；busy_num == 3 时需判断可释放
+	assign i_ready = (l1_buf_busy_num < 2'd3) || buf_can_release;
+	
+	// 判断当前选中的buffer是否可以释放（busy_num==3时）
+	// 当 sel=0 时检查 buf0_line_id，sel=1 检查 buf1，sel=2 检查 buf2
+	assign buf_can_release = (l1_buf_busy_num == 2'd3) && v_min_src_row_update &&
+	                         ((l1_wr_buf_sel == 2'd0 && l1_buf0_line_id < v_min_src_row_synced) ||
+	                          (l1_wr_buf_sel == 2'd1 && l1_buf1_line_id < v_min_src_row_synced) ||
+	                          (l1_wr_buf_sel == 2'd2 && l1_buf2_line_id < v_min_src_row_synced));
 	
 	// L1 wrapper实例0
 	line_buffer_wrapper #(
@@ -174,88 +197,161 @@ module bilinear_scaler_vh #(
 		.wr_en         (l1_buf0_wr_en         ),//I1,
 		.wr_addr       (l1_wr_addr_cnt        ),//Ix,
 		.wr_data       (i_data                ),//Ix,
-		.wr_full       (l1_buf0_wr_full       ),//O1,
+		.wr_full       (                      ),//O1,
 		.rd_en         (/* TODO */            ),//I1,
 		.rd_addr       (l1_rd_addr            ),//Ix,
 		.rd_data       (l1_rd_data_0          ),//Ox,
-		.rd_data_valid (l1_rd_data_0_valid    ) //O1,
+		.rd_data_valid (l1_rd_data_0_valid    ),//O1,
+		.datacnt       (l1_buf0_datacnt       ) //Ox+1,
 	);
 	
 	// L1 wrapper实例1
 	line_buffer_wrapper #(
-		.DATA_WIDTH(DATA_WIDTH	),
-		.MAX_WIDTH (MAX_WIDTH 	),
-		.VENDOR    ("GENERIC"	)
+		.DATA_WIDTH(DATA_WIDTH ),
+		.MAX_WIDTH (MAX_WIDTH  ),
+		.VENDOR    ("GENERIC"  )
 	) u_l1_buf1 (
 		.clk           (clk_in                ),//I1,
 		.rst_n         (rst_n_in              ),//I1,
 		.wr_en         (l1_buf1_wr_en         ),//I1,
 		.wr_addr       (l1_wr_addr_cnt        ),//Ix,
 		.wr_data       (i_data                ),//Ix,
-		.wr_full       (l1_buf1_wr_full       ),//O1,
+		.wr_full       (                      ),//O1,
 		.rd_en         (/* TODO */            ),//I1,
 		.rd_addr       (l1_rd_addr            ),//Ix,
 		.rd_data       (l1_rd_data_1          ),//Ox,
-		.rd_data_valid (l1_rd_data_1_valid    ) //O1,
+		.rd_data_valid (l1_rd_data_1_valid    ),//O1,
+		.datacnt       (l1_buf1_datacnt       ) //Ox+1,
+	);
+	
+	// L1 wrapper实例2
+	line_buffer_wrapper #(
+		.DATA_WIDTH(DATA_WIDTH ),
+		.MAX_WIDTH (MAX_WIDTH  ),
+		.VENDOR    ("GENERIC"  )
+	) u_l1_buf2 (
+		.clk           (clk_in                ),//I1,
+		.rst_n         (rst_n_in              ),//I1,
+		.wr_en         (l1_buf2_wr_en         ),//I1,
+		.wr_addr       (l1_wr_addr_cnt        ),//Ix,
+		.wr_data       (i_data                ),//Ix,
+		.wr_full       (                      ),//O1,
+		.rd_en         (/* TODO */            ),//I1,
+		.rd_addr       (l1_rd_addr            ),//Ix,
+		.rd_data       (l1_rd_data_2          ),//Ox,
+		.rd_data_valid (l1_rd_data_2_valid    ),//O1,
+		.datacnt       (l1_buf2_datacnt       ) //Ox+1,
 	);
 	
 	//------------------------------------------------------------------------
-	// L1 写控制（ping-pong切换）
+	// L1 写控制 - 写地址计数器（单独always）
 	//------------------------------------------------------------------------
-	// frame_start_pulse 检测（clk_in域）
-	reg frame_start_toggle_in;
-	always @(posedge clk_in or negedge rst_n_in) begin
-		if (rst_n_in == 1'b0)
-			frame_start_toggle_in <= 1'b0;
-		else if (frame_start_pulse == 1'b1)
-			frame_start_toggle_in <= #U_DLY ~frame_start_toggle_in;
-	end
-
-	reg [2:0] frame_start_sync_in;
-	always @(posedge clk_in or negedge rst_n_in) begin
-		if (rst_n_in == 1'b0)
-			frame_start_sync_in <= 3'b000;
-		else
-			frame_start_sync_in <= #U_DLY {frame_start_sync_in[1:0], frame_start_toggle};
-	end
-
-	wire frame_start_pulse_in = frame_start_sync_in[2] ^ frame_start_sync_in[1];
-
 	always @(posedge clk_in or negedge rst_n_in) begin
 		if (rst_n_in == 1'b0) begin
-			l1_wr_addr_cnt  <= {ADDR_WIDTH{1'b0}};
-			l1_wr_buf_sel   <= 1'b0;
-			l1_wr_buf0_full <= 1'b0;
-			l1_wr_buf1_full <= 1'b0;
+			l1_wr_addr_cnt <= {ADDR_WIDTH{1'b0}};
 		end
-		else begin
-			// 帧开始：清空buffer标志
-			if (frame_start_pulse_in == 1'b1) begin
-				l1_wr_buf0_full <= #U_DLY 1'b0;
-				l1_wr_buf1_full <= #U_DLY 1'b0;
-			end
-			// 正常写入
-			else if (i_valid == 1'b1 && i_ready == 1'b1) begin
-				if (i_last == 1'b1 || l1_wr_addr_cnt >= MAX_WIDTH-1) begin
-					// 行结束，切换buffer
-					l1_wr_addr_cnt <= #U_DLY {ADDR_WIDTH{1'b0}};
-					l1_wr_buf_sel  <= #U_DLY ~l1_wr_buf_sel;
-				end
-				else begin
-					l1_wr_addr_cnt <= #U_DLY l1_wr_addr_cnt + 1'b1;
-				end
-			end
-
-			// 检测到wrapper将满信号，锁存full标志
-			if (l1_buf0_wr_full == 1'b1)
-				l1_wr_buf0_full <= #U_DLY 1'b1;
-			if (l1_buf1_wr_full == 1'b1)
-				l1_wr_buf1_full <= #U_DLY 1'b1;
+		else if (i_valid == 1'b1 && i_ready == 1'b1) begin
+			if (i_last == 1'b1)
+				l1_wr_addr_cnt <= #U_DLY {ADDR_WIDTH{1'b0}};  // 行结束，地址复位
+			else
+				l1_wr_addr_cnt <= #U_DLY l1_wr_addr_cnt + 1'b1;
 		end
 	end
 	
-	// i_ready控制：当两个buffer都满时反压
-	assign i_ready = ~(l1_wr_buf0_full & l1_wr_buf1_full);
+	//------------------------------------------------------------------------
+	// L1 写控制 - 输入行计数器（单独always）
+	//------------------------------------------------------------------------
+	always @(posedge clk_in or negedge rst_n_in) begin
+		if (rst_n_in == 1'b0) begin
+			in_row_idx <= 16'd0;
+		end
+		else if (i_frame_start == 1'b1 && i_valid == 1'b1) begin
+			in_row_idx <= #U_DLY 16'd0;  // 帧开始复位
+		end
+		else if (i_valid == 1'b1 && i_ready == 1'b1 && i_last == 1'b1) begin
+			in_row_idx <= #U_DLY in_row_idx + 1'b1;  // 行结束递增
+		end
+	end
+	
+	//------------------------------------------------------------------------
+	// L1 写控制 - buffer选择（0->1->2->0循环）
+	//------------------------------------------------------------------------
+	always @(posedge clk_in or negedge rst_n_in) begin
+		if (rst_n_in == 1'b0)
+			l1_wr_buf_sel <= 2'd0;  // 从buf0开始
+		else if (i_frame_start == 1'b1 && i_valid == 1'b1)
+			l1_wr_buf_sel <= #U_DLY 2'd0;  // 帧开始复位
+		else if (i_valid == 1'b1 && i_ready == 1'b1 && i_last == 1'b1)
+			l1_wr_buf_sel <= #U_DLY l1_wr_buf_sel + 1'b1;  // 0->1->2->0循环
+	end
+	
+	//------------------------------------------------------------------------
+	// L1 写控制 - busy_num计数（0->1->2->3饱和）
+	//------------------------------------------------------------------------
+	always @(posedge clk_in or negedge rst_n_in) begin
+		if (rst_n_in == 1'b0)
+			l1_buf_busy_num <= 2'd0;
+		else if (i_frame_start == 1'b1 && i_valid == 1'b1)
+			l1_buf_busy_num <= #U_DLY 2'd0;  // 帧开始复位
+		else if (i_valid == 1'b1 && i_ready == 1'b1 && i_last == 1'b1)
+			// 写完一行，占用数+1，饱和在3
+			if (l1_buf_busy_num < 2'd3)
+				l1_buf_busy_num <= #U_DLY l1_buf_busy_num + 1'b1;
+	end
+	
+	//------------------------------------------------------------------------
+	// L1 写控制 - 记录每个buffer存储的行号
+	//------------------------------------------------------------------------
+	always @(posedge clk_in or negedge rst_n_in) begin
+		if (rst_n_in == 1'b0) begin
+			l1_buf0_line_id <= 16'd0;
+			l1_buf1_line_id <= 16'd0;
+			l1_buf2_line_id <= 16'd0;
+		end
+		else if (i_frame_start == 1'b1 && i_valid == 1'b1) begin
+			l1_buf0_line_id <= #U_DLY 16'd0;
+			l1_buf1_line_id <= #U_DLY 16'd0;
+			l1_buf2_line_id <= #U_DLY 16'd0;
+		end
+		else if (i_valid == 1'b1 && i_ready == 1'b1 && i_last == 1'b1) begin
+			// i_last时记录当前行号到选中的buffer
+			case (l1_wr_buf_sel)
+				2'd0: l1_buf0_line_id <= #U_DLY in_row_idx;
+				2'd1: l1_buf1_line_id <= #U_DLY in_row_idx;
+				2'd2: l1_buf2_line_id <= #U_DLY in_row_idx;
+			endcase
+		end
+	end
+	
+	//------------------------------------------------------------------------
+	// v_min_src_row 跨时钟域同步（clk_out -> clk_in）
+	//------------------------------------------------------------------------
+	// clk_out域：在V-filter模块中，v_min_src_row更新时toggle
+	// 这里假设 v_min_src_row_toggle_out 信号由clk_out域驱动
+	
+	// clk_in域：双触发器同步
+	always @(posedge clk_in or negedge rst_n_in) begin
+		if (rst_n_in == 1'b0) begin
+			v_min_src_row_sync_reg <= 3'b000;
+		end
+		else begin
+			v_min_src_row_sync_reg <= #U_DLY {v_min_src_row_sync_reg[1:0], v_min_src_row_toggle_out};
+		end
+	end
+	
+	// 边沿检测产生更新脉冲
+	assign v_min_src_row_update = v_min_src_row_sync_reg[2] ^ v_min_src_row_sync_reg[1];
+	
+	// 同步过来的v_min_src_row值（在更新时采样）
+	always @(posedge clk_in or negedge rst_n_in) begin
+		if (rst_n_in == 1'b0) begin
+			v_min_src_row_synced <= 16'd0;
+		end
+		else if (v_min_src_row_update) begin
+			// TODO: 这里需要从clk_out域同步过来的实际值
+			// 暂时保持，需要V-filter模块提供v_min_src_row的输出
+		end
+	end
 
 	//------------------------------------------------------------------------
 	//========================================================================
@@ -270,7 +366,7 @@ module bilinear_scaler_vh #(
 	reg        l2_buf_valid [0:3] ;// buffer有效标志
 	reg [15:0] l2_buf_line_id[0:3];// buffer存储的源行号
 	reg        l2_rd_req          ;// L1读请求
-
+	
 	// L2状态定义
 	localparam L2_EMPTY   = 2'b00 ;
 	localparam L2_FILLING = 2'b01 ;
@@ -300,6 +396,7 @@ module bilinear_scaler_vh #(
 			l2_rd_req       <= 1'b0;
 			l1_rd_addr      <= {ADDR_WIDTH{1'b0}};
 			l1_rd_switch    <= 1'b0;
+			l1_rd_buf_sel   <= 2'd0;
 			l2_wr_buf_id    <= 2'd0;
 			l2_buf_valid[0] <= 1'b0;
 			l2_buf_valid[1] <= 1'b0;
@@ -318,12 +415,11 @@ module bilinear_scaler_vh #(
 				end
 
 				TRANS_WAIT: begin
-					// 等待L1有数据
-					if (l1_buf_status != 2'b00) begin
-						trans_state    <= #U_DLY TRANS_READ;
-						trans_addr_cnt <= #U_DLY {ADDR_WIDTH{1'b0}};
-						l2_rd_req      <= #U_DLY 1'b1;
-					end
+					// TODO: 根据datacnt判断L1是否有足够数据可读
+					// 暂时直接启动读取
+					trans_state    <= #U_DLY TRANS_READ;
+					trans_addr_cnt <= #U_DLY {ADDR_WIDTH{1'b0}};
+					l2_rd_req      <= #U_DLY 1'b1;
 				end
 
 				TRANS_READ: begin
@@ -357,6 +453,8 @@ module bilinear_scaler_vh #(
 					l2_wr_buf_id <= #U_DLY l2_wr_buf_id + 1'b1;
 					l2_fill_cnt  <= #U_DLY l2_fill_cnt + 1'b1;
 					l1_rd_switch <= #U_DLY 1'b1;
+					
+					// TODO: 根据datacnt判断切换哪个buffer读取
 
 					// 双线性：2行就绪即可开始，继续填充更多行
 					trans_state <= #U_DLY TRANS_WAIT;
@@ -365,6 +463,30 @@ module bilinear_scaler_vh #(
 				default: trans_state <= #U_DLY TRANS_IDLE;
 			endcase
 		end
+	end
+
+	//------------------------------------------------------------------------
+	// L1读数据选择（根据l1_rd_buf_sel选择3个buffer之一）
+	//------------------------------------------------------------------------
+	always @(*) begin
+		case (l1_rd_buf_sel)
+			2'd0: begin
+				l1_rd_data       = l1_rd_data_0;
+				l1_rd_data_valid = l1_rd_data_0_valid;
+			end
+			2'd1: begin
+				l1_rd_data       = l1_rd_data_1;
+				l1_rd_data_valid = l1_rd_data_1_valid;
+			end
+			2'd2: begin
+				l1_rd_data       = l1_rd_data_2;
+				l1_rd_data_valid = l1_rd_data_2_valid;
+			end
+			default: begin
+				l1_rd_data       = l1_rd_data_0;
+				l1_rd_data_valid = l1_rd_data_0_valid;
+			end
+		endcase
 	end
 
 	//------------------------------------------------------------------------
