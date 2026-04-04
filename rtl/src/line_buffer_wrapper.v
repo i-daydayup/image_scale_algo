@@ -26,7 +26,7 @@ module line_buffer_wrapper #(
 	//------------------------------------------------------------------------
 	input  wire                  clk            ,//I1,时钟
 	input  wire                  rst_n          ,//I1,复位
-	
+
 	//------------------------------------------------------------------------
 	// 写端口
 	//------------------------------------------------------------------------
@@ -34,7 +34,7 @@ module line_buffer_wrapper #(
 	input  wire [ADDR_WIDTH-1:0] wr_addr        ,//Ix,写地址
 	input  wire [DATA_WIDTH-1:0] wr_data        ,//Ix,写数据
 	output reg                   wr_full         ,//O1,写满（可选，用于反压）
-	
+
 	//------------------------------------------------------------------------
 	// 读端口
 	//------------------------------------------------------------------------
@@ -43,24 +43,24 @@ module line_buffer_wrapper #(
 	output reg  [DATA_WIDTH-1:0] rd_data         ,//Ox,读数据（打拍输出）
 	output reg                   rd_data_valid   //O1,读数据有效
 );
-	
+
 	//------------------------------------------------------------------------
 	// 仿真延时参数
 	//------------------------------------------------------------------------
 	localparam U_DLY = 1;
-	
+
 	//------------------------------------------------------------------------
 	// 存储器实例（Generic实现）
 	//------------------------------------------------------------------------
 	reg [DATA_WIDTH-1:0] mem [0:MAX_WIDTH-1];
-	
+
 	//------------------------------------------------------------------------
 	// 写端口：输入打拍 + 写入
 	//------------------------------------------------------------------------
 	reg                  wr_en_d1   ;
 	reg [ADDR_WIDTH-1:0] wr_addr_d1 ;
 	reg [DATA_WIDTH-1:0] wr_data_d1 ;
-	
+
 	always @(posedge clk or negedge rst_n) begin
 		if (rst_n == 1'b0) begin
 			wr_en_d1   <= 1'b0;
@@ -73,23 +73,23 @@ module line_buffer_wrapper #(
 			wr_data_d1 <= #U_DLY wr_data;
 		end
 	end
-	
+
 	// 写入存储器
 	always @(posedge clk) begin
 		if (wr_en_d1 == 1'b1) begin
 			mem[wr_addr_d1] <= #U_DLY wr_data_d1;
 		end
 	end
-	
+
 	//------------------------------------------------------------------------
 	// 读端口：组合读 + 输出打拍
 	//------------------------------------------------------------------------
 	reg [DATA_WIDTH-1:0] rd_data_raw;
-	
+
 	always @(*) begin
 		rd_data_raw = mem[rd_addr];
 	end
-	
+
 	always @(posedge clk or negedge rst_n) begin
 		if (rst_n == 1'b0) begin
 			rd_data       <= {DATA_WIDTH{1'b0}};
@@ -105,17 +105,17 @@ module line_buffer_wrapper #(
 			end
 		end
 	end
-	
+
 	//------------------------------------------------------------------------
-	// 写满标志（简化版，实际可配置为FIFO深度检测）
+	// 写满标志（将满检测：地址达到 MAX_WIDTH-2 时置1）
 	//------------------------------------------------------------------------
 	always @(posedge clk or negedge rst_n) begin
 		if (rst_n == 1'b0) begin
 			wr_full <= 1'b0;
 		end
 		else begin
-			// 简化：永不满，上层控制写入速率
-			wr_full <= #U_DLY 1'b0;
+			// 将满检测：地址达到 MAX_WIDTH-2，给上层一个周期响应
+			wr_full <= #U_DLY (wr_addr >= (MAX_WIDTH-2));
 		end
 	end
 

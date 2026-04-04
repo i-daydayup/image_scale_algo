@@ -136,10 +136,12 @@ module bilinear_scaler_vh #(
 	// 实例化2个单行buffer，上层控制切换
 	
 	// L1 写控制（clk_in域）
-	reg [ADDR_WIDTH-1:0] l1_wr_addr_cnt ;// 写地址计数
-	reg                  l1_wr_buf_sel  ;// 写buffer选择(0/1)
-	reg                  l1_wr_buf0_full;// buffer0写满
-	reg                  l1_wr_buf1_full;// buffer1写满
+	reg  [ADDR_WIDTH-1:0] l1_wr_addr_cnt    ;// 写地址计数
+	reg                   l1_wr_buf_sel     ;// 写buffer选择(0/1)
+	wire                  l1_buf0_wr_full   ;// buffer0将满（来自wrapper）
+	wire                  l1_buf1_wr_full   ;// buffer1将满（来自wrapper）
+	reg                   l1_wr_buf0_full   ;// buffer0写满标志（锁存）
+	reg                   l1_wr_buf1_full   ;// buffer1写满标志（锁存）
 	
 	// L1 读控制（clk_out域）
 	reg  [ADDR_WIDTH-1:0] l1_rd_addr       ;// 读地址
@@ -172,7 +174,7 @@ module bilinear_scaler_vh #(
 		.wr_en         (l1_buf0_wr_en         ),//I1,
 		.wr_addr       (l1_wr_addr_cnt        ),//Ix,
 		.wr_data       (i_data                ),//Ix,
-		.wr_full       (                      ),//O1,
+		.wr_full       (l1_buf0_wr_full       ),//O1,
 		.rd_en         (/* TODO */            ),//I1,
 		.rd_addr       (l1_rd_addr            ),//Ix,
 		.rd_data       (l1_rd_data_0          ),//Ox,
@@ -190,7 +192,7 @@ module bilinear_scaler_vh #(
 		.wr_en         (l1_buf1_wr_en         ),//I1,
 		.wr_addr       (l1_wr_addr_cnt        ),//Ix,
 		.wr_data       (i_data                ),//Ix,
-		.wr_full       (                      ),//O1,
+		.wr_full       (l1_buf1_wr_full       ),//O1,
 		.rd_en         (/* TODO */            ),//I1,
 		.rd_addr       (l1_rd_addr            ),//Ix,
 		.rd_data       (l1_rd_data_1          ),//Ox,
@@ -200,6 +202,25 @@ module bilinear_scaler_vh #(
 	//------------------------------------------------------------------------
 	// L1 写控制（ping-pong切换）
 	//------------------------------------------------------------------------
+	// frame_start_pulse 检测（clk_in域）
+	reg frame_start_toggle_in;
+	always @(posedge clk_in or negedge rst_n_in) begin
+		if (rst_n_in == 1'b0)
+			frame_start_toggle_in <= 1'b0;
+		else if (frame_start_pulse == 1'b1)
+			frame_start_toggle_in <= #U_DLY ~frame_start_toggle_in;
+	end
+
+	reg [2:0] frame_start_sync_in;
+	always @(posedge clk_in or negedge rst_n_in) begin
+		if (rst_n_in == 1'b0)
+			frame_start_sync_in <= 3'b000;
+		else
+			frame_start_sync_in <= #U_DLY {frame_start_sync_in[1:0], frame_start_toggle};
+	end
+
+	wire frame_start_pulse_in = frame_start_sync_in[2] ^ frame_start_sync_in[1];
+
 	always @(posedge clk_in or negedge rst_n_in) begin
 		if (rst_n_in == 1'b0) begin
 			l1_wr_addr_cnt  <= {ADDR_WIDTH{1'b0}};
@@ -207,19 +228,29 @@ module bilinear_scaler_vh #(
 			l1_wr_buf0_full <= 1'b0;
 			l1_wr_buf1_full <= 1'b0;
 		end
-		else if (i_valid == 1'b1 && i_ready == 1'b1) begin
-			if (i_last == 1'b1 || l1_wr_addr_cnt >= MAX_WIDTH-1) begin
-				// 行结束，切换buffer
-				l1_wr_addr_cnt <= #U_DLY {ADDR_WIDTH{1'b0}};
-				l1_wr_buf_sel  <= #U_DLY ~l1_wr_buf_sel;
-				if (l1_wr_buf_sel == 1'b0)
-					l1_wr_buf0_full <= #U_DLY 1'b1;
-				else
-					l1_wr_buf1_full <= #U_DLY 1'b1;
+		else begin
+			// 帧开始：清空buffer标志
+			if (frame_start_pulse_in == 1'b1) begin
+				l1_wr_buf0_full <= #U_DLY 1'b0;
+				l1_wr_buf1_full <= #U_DLY 1'b0;
 			end
-			else begin
-				l1_wr_addr_cnt <= #U_DLY l1_wr_addr_cnt + 1'b1;
+			// 正常写入
+			else if (i_valid == 1'b1 && i_ready == 1'b1) begin
+				if (i_last == 1'b1 || l1_wr_addr_cnt >= MAX_WIDTH-1) begin
+					// 行结束，切换buffer
+					l1_wr_addr_cnt <= #U_DLY {ADDR_WIDTH{1'b0}};
+					l1_wr_buf_sel  <= #U_DLY ~l1_wr_buf_sel;
+				end
+				else begin
+					l1_wr_addr_cnt <= #U_DLY l1_wr_addr_cnt + 1'b1;
+				end
 			end
+
+			// 检测到wrapper将满信号，锁存full标志
+			if (l1_buf0_wr_full == 1'b1)
+				l1_wr_buf0_full <= #U_DLY 1'b1;
+			if (l1_buf1_wr_full == 1'b1)
+				l1_wr_buf1_full <= #U_DLY 1'b1;
 		end
 	end
 	
