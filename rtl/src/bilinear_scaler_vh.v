@@ -421,7 +421,7 @@ module bilinear_scaler_vh #(
 				end
 
 				TRANS_WAIT: begin
-					// TODO: 根据datacnt判断L1是否有足够数据可读
+					// TODO: 根据 datacnt 判断L1是否有足够数据可读
 					// 暂时直接启动读取
 					trans_state    <= #U_DLY TRANS_READ;
 					trans_addr_cnt <= #U_DLY {ADDR_WIDTH{1'b0}};
@@ -544,36 +544,47 @@ module bilinear_scaler_vh #(
 		.valid        (coord_x_valid  ) //O1,
 	);
 
-	// 输出控制
+	// 输出控制 - output_active（启动/停止控制）
 	always @(posedge clk_out or negedge rst_n_out) begin
-		if (rst_n_out == 1'b0) begin
-			dst_y_cnt     <= 16'd0;
-			dst_x_cnt     <= 16'd0;
+		if (rst_n_out == 1'b0)
 			output_active <= 1'b0;
-		end
-		else if (frame_start_pulse == 1'b1) begin
-			dst_y_cnt     <= 16'd0;
-			dst_x_cnt     <= 16'd0;
+		else if (frame_start_pulse == 1'b1)
 			output_active <= 1'b0;
+		else if (output_active == 1'b0 && l2_fill_cnt >= 2'd2)
+			// 双线性：L2有2行即可开始输出
+			output_active <= #U_DLY 1'b1;
+		else if (output_active == 1'b1 && o_valid == 1'b1 && o_ready == 1'b1 &&
+		         dst_x_cnt >= r_dst_width - 1 && dst_y_cnt >= r_dst_height - 1)
+			// 最后一行最后一个像素输出完成，停止
+			output_active <= #U_DLY 1'b0;
+	end
+
+	// 输出控制 - dst_x_cnt（行内像素计数）
+	always @(posedge clk_out or negedge rst_n_out) begin
+		if (rst_n_out == 1'b0)
+			dst_x_cnt <= 16'd0;
+		else if (frame_start_pulse == 1'b1)
+			dst_x_cnt <= 16'd0;
+		else if (output_active == 1'b1 && o_valid == 1'b1 && o_ready == 1'b1) begin
+			if (dst_x_cnt >= r_dst_width - 1)
+				dst_x_cnt <= 16'd0;  // 行结束，复位
+			else
+				dst_x_cnt <= #U_DLY dst_x_cnt + 1'b1;  // 像素递增
 		end
-		else if (output_active == 1'b1 || (l2_fill_cnt >= 2'd2)) begin
-			// 双线性：L2有2行即可开始
-			output_active <= 1'b1;
-			if (o_valid == 1'b1 && o_ready == 1'b1) begin
-				if (dst_x_cnt >= r_dst_width - 1) begin
-					dst_x_cnt <= 16'd0;
-					if (dst_y_cnt >= r_dst_height - 1) begin
-						dst_y_cnt     <= 16'd0;
-						output_active <= 1'b0;
-					end
-					else begin
-						dst_y_cnt <= #U_DLY dst_y_cnt + 1'b1;
-					end
-				end
-				else begin
-					dst_x_cnt <= #U_DLY dst_x_cnt + 1'b1;
-				end
-			end
+	end
+
+	// 输出控制 - dst_y_cnt（行计数）
+	always @(posedge clk_out or negedge rst_n_out) begin
+		if (rst_n_out == 1'b0)
+			dst_y_cnt <= 16'd0;
+		else if (frame_start_pulse == 1'b1)
+			dst_y_cnt <= 16'd0;
+		else if (output_active == 1'b1 && o_valid == 1'b1 && o_ready == 1'b1 &&
+		         dst_x_cnt >= r_dst_width - 1) begin
+			if (dst_y_cnt >= r_dst_height - 1)
+				dst_y_cnt <= 16'd0;  // 帧结束，复位
+			else
+				dst_y_cnt <= #U_DLY dst_y_cnt + 1'b1;  // 行递增
 		end
 	end
 
