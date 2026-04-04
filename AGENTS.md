@@ -453,22 +453,37 @@ project/
   end
   ```
 - [ ] **begin/end 精简原则**
-  - ✅ 推荐：**单行赋值省略 begin/end**，代码更简洁
-  - ❌ 避免：单行逻辑也加 begin/end，显得冗余
+  - ✅ 推荐：**单行代码省略 begin/end**，代码更简洁（注释不算代码行）
+  - ✅ 推荐：**多行代码必须加 begin/end**，提高可读性和可维护性
+  - ❌ 避免：单行代码也加 begin/end，显得冗余
+  - ❌ 避免：多行代码不加 begin/end，容易出错且难以阅读
   ```verilog
-  // ✅ 正确：单行省略 begin/end
+  // ✅ 正确：单行代码省略 begin/end（可以有注释）
   if (rst_n == 1'b0)
       sel <= 2'd0;
   else if (condition)
-      sel <= #U_DLY next_sel;
+      // 写完一行，占用数+1，饱和在3
+      if (busy_num < 3)
+          busy_num <= #U_DLY busy_num + 1;
+  
+  // ✅ 正确：多行代码使用 begin/end
+  else if (condition) begin
+      buf0_line_id <= #U_DLY in_row_idx;
+      buf1_line_id <= #U_DLY in_row_idx + 1;
+  end
       
-  // ❌ 冗余：单行也加 begin/end
+  // ❌ 冗余：单行代码加 begin/end
   if (rst_n == 1'b0) begin
       sel <= 2'd0;
   end
   else if (condition) begin
       sel <= #U_DLY next_sel;
   end
+  
+  // ❌ 错误：多行代码不加 begin/end
+  else if (condition)
+      buf0_line_id <= #U_DLY in_row_idx;
+      buf1_line_id <= #U_DLY in_row_idx + 1;
   ```
 - [ ] **信号声明和赋值分开写**
   - ✅ 推荐：`wire sig;` + `assign sig = ...;`

@@ -134,7 +134,7 @@ module bilinear_scaler_vh #(
 	// 第2部分：L1 输入缓冲（2行Wrapper，上层实现ping-pong）
 	//========================================================================
 	// 实例化3个单行buffer，1r0w状态管理（1=可读，0=可写）
-	
+
 	// L1 写控制（clk_in域）
 	reg  [ADDR_WIDTH-1:0] l1_wr_addr_cnt     ;// 写地址计数
 	reg  [1:0]            l1_wr_buf_sel      ;// 写buffer选择: 0/1/2 循环
@@ -143,7 +143,7 @@ module bilinear_scaler_vh #(
 	reg  [15:0]           l1_buf0_line_id    ;// buffer0存储的行号
 	reg  [15:0]           l1_buf1_line_id    ;// buffer1存储的行号
 	reg  [15:0]           l1_buf2_line_id    ;// buffer2存储的行号
-	
+
 	// L1 读控制（clk_out域）
 	reg  [ADDR_WIDTH-1:0] l1_rd_addr         ;// 读地址
 	reg  [1:0]            l1_rd_buf_sel      ;// 读buffer选择(0/1/2)
@@ -156,36 +156,36 @@ module bilinear_scaler_vh #(
 	wire                  l1_rd_data_2_valid ;// buffer2读有效
 	reg  [DATA_WIDTH-1:0] l1_rd_data         ;// 选择后的读数据
 	reg                   l1_rd_data_valid   ;// 选择后的读有效
-	
+
 	// L1 buffer datacnt（读时钟域可见）
 	wire [ADDR_WIDTH:0]   l1_buf0_datacnt    ;// buffer0数据计数
 	wire [ADDR_WIDTH:0]   l1_buf1_datacnt    ;// buffer1数据计数
 	wire [ADDR_WIDTH:0]   l1_buf2_datacnt    ;// buffer2数据计数
-	
+
 	// v_min_src_row 从clk_out同步到clk_in（跨时钟域）
 	reg                   v_min_src_row_toggle_out;
 	reg  [2:0]            v_min_src_row_sync_reg;
 	wire                  v_min_src_row_update;
 	reg  [15:0]           v_min_src_row_synced;
-	
+
 	// 判断当前选中的buffer是否可以释放（busy_num==3时）
 	wire                  buf_can_release;
-	
+
 	// L1 buffer写使能
 	wire l1_buf0_wr_en = i_valid & i_ready & (l1_wr_buf_sel == 2'd0);
 	wire l1_buf1_wr_en = i_valid & i_ready & (l1_wr_buf_sel == 2'd1);
 	wire l1_buf2_wr_en = i_valid & i_ready & (l1_wr_buf_sel == 2'd2);
-	
+
 	// i_ready：busy_num < 3 时无条件可写；busy_num == 3 时需判断可释放
 	assign i_ready = (l1_buf_busy_num < 2'd3) || buf_can_release;
-	
+
 	// 判断当前选中的buffer是否可以释放（busy_num==3时）
 	// 当 sel=0 时检查 buf0_line_id，sel=1 检查 buf1，sel=2 检查 buf2
 	assign buf_can_release = (l1_buf_busy_num == 2'd3) && v_min_src_row_update &&
 	                         ((l1_wr_buf_sel == 2'd0 && l1_buf0_line_id < v_min_src_row_synced) ||
 	                          (l1_wr_buf_sel == 2'd1 && l1_buf1_line_id < v_min_src_row_synced) ||
 	                          (l1_wr_buf_sel == 2'd2 && l1_buf2_line_id < v_min_src_row_synced));
-	
+
 	// L1 wrapper实例0
 	line_buffer_wrapper #(
 		.DATA_WIDTH(DATA_WIDTH ),
@@ -204,7 +204,7 @@ module bilinear_scaler_vh #(
 		.rd_data_valid (l1_rd_data_0_valid    ),//O1,
 		.datacnt       (l1_buf0_datacnt       ) //Ox+1,
 	);
-	
+
 	// L1 wrapper实例1
 	line_buffer_wrapper #(
 		.DATA_WIDTH(DATA_WIDTH ),
@@ -223,7 +223,7 @@ module bilinear_scaler_vh #(
 		.rd_data_valid (l1_rd_data_1_valid    ),//O1,
 		.datacnt       (l1_buf1_datacnt       ) //Ox+1,
 	);
-	
+
 	// L1 wrapper实例2
 	line_buffer_wrapper #(
 		.DATA_WIDTH(DATA_WIDTH ),
@@ -242,7 +242,7 @@ module bilinear_scaler_vh #(
 		.rd_data_valid (l1_rd_data_2_valid    ),//O1,
 		.datacnt       (l1_buf2_datacnt       ) //Ox+1,
 	);
-	
+
 	//------------------------------------------------------------------------
 	// L1 写控制 - 写地址计数器（单独always）
 	//------------------------------------------------------------------------
@@ -257,7 +257,7 @@ module bilinear_scaler_vh #(
 				l1_wr_addr_cnt <= #U_DLY l1_wr_addr_cnt + 1'b1;
 		end
 	end
-	
+
 	//------------------------------------------------------------------------
 	// L1 写控制 - 输入行计数器（单独always）
 	//------------------------------------------------------------------------
@@ -272,7 +272,7 @@ module bilinear_scaler_vh #(
 			in_row_idx <= #U_DLY in_row_idx + 1'b1;  // 行结束递增
 		end
 	end
-	
+
 	//------------------------------------------------------------------------
 	// L1 写控制 - buffer选择（0->1->2->0循环）
 	//------------------------------------------------------------------------
@@ -281,10 +281,15 @@ module bilinear_scaler_vh #(
 			l1_wr_buf_sel <= 2'd0;  // 从buf0开始
 		else if (i_frame_start == 1'b1 && i_valid == 1'b1)
 			l1_wr_buf_sel <= #U_DLY 2'd0;  // 帧开始复位
-		else if (i_valid == 1'b1 && i_ready == 1'b1 && i_last == 1'b1)
-			l1_wr_buf_sel <= #U_DLY l1_wr_buf_sel + 1'b1;  // 0->1->2->0循环
+		else if (i_valid == 1'b1 && i_ready == 1'b1 && i_last == 1'b1) begin
+			// 0->1->2->0 循环
+			if (l1_wr_buf_sel >= 2'd2)
+				l1_wr_buf_sel <= #U_DLY 2'd0;
+			else
+				l1_wr_buf_sel <= #U_DLY l1_wr_buf_sel + 1'b1;
+		end
 	end
-	
+
 	//------------------------------------------------------------------------
 	// L1 写控制 - busy_num计数（0->1->2->3饱和）
 	//------------------------------------------------------------------------
@@ -293,12 +298,13 @@ module bilinear_scaler_vh #(
 			l1_buf_busy_num <= 2'd0;
 		else if (i_frame_start == 1'b1 && i_valid == 1'b1)
 			l1_buf_busy_num <= #U_DLY 2'd0;  // 帧开始复位
-		else if (i_valid == 1'b1 && i_ready == 1'b1 && i_last == 1'b1)
+		else if (i_valid == 1'b1 && i_ready == 1'b1 && i_last == 1'b1) begin
 			// 写完一行，占用数+1，饱和在3
 			if (l1_buf_busy_num < 2'd3)
 				l1_buf_busy_num <= #U_DLY l1_buf_busy_num + 1'b1;
+		end
 	end
-	
+
 	//------------------------------------------------------------------------
 	// L1 写控制 - 记录每个buffer存储的行号
 	//------------------------------------------------------------------------
@@ -322,13 +328,13 @@ module bilinear_scaler_vh #(
 			endcase
 		end
 	end
-	
+
 	//------------------------------------------------------------------------
 	// v_min_src_row 跨时钟域同步（clk_out -> clk_in）
 	//------------------------------------------------------------------------
 	// clk_out域：在V-filter模块中，v_min_src_row更新时toggle
 	// 这里假设 v_min_src_row_toggle_out 信号由clk_out域驱动
-	
+
 	// clk_in域：双触发器同步
 	always @(posedge clk_in or negedge rst_n_in) begin
 		if (rst_n_in == 1'b0) begin
@@ -338,10 +344,10 @@ module bilinear_scaler_vh #(
 			v_min_src_row_sync_reg <= #U_DLY {v_min_src_row_sync_reg[1:0], v_min_src_row_toggle_out};
 		end
 	end
-	
+
 	// 边沿检测产生更新脉冲
 	assign v_min_src_row_update = v_min_src_row_sync_reg[2] ^ v_min_src_row_sync_reg[1];
-	
+
 	// 同步过来的v_min_src_row值（在更新时采样）
 	always @(posedge clk_in or negedge rst_n_in) begin
 		if (rst_n_in == 1'b0) begin
@@ -366,7 +372,7 @@ module bilinear_scaler_vh #(
 	reg        l2_buf_valid [0:3] ;// buffer有效标志
 	reg [15:0] l2_buf_line_id[0:3];// buffer存储的源行号
 	reg        l2_rd_req          ;// L1读请求
-	
+
 	// L2状态定义
 	localparam L2_EMPTY   = 2'b00 ;
 	localparam L2_FILLING = 2'b01 ;
@@ -453,7 +459,7 @@ module bilinear_scaler_vh #(
 					l2_wr_buf_id <= #U_DLY l2_wr_buf_id + 1'b1;
 					l2_fill_cnt  <= #U_DLY l2_fill_cnt + 1'b1;
 					l1_rd_switch <= #U_DLY 1'b1;
-					
+
 					// TODO: 根据datacnt判断切换哪个buffer读取
 
 					// 双线性：2行就绪即可开始，继续填充更多行
