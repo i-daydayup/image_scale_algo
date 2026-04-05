@@ -25,12 +25,13 @@ module ut_bilinear_scaler;
 	//------------------------------------------------------------------------
 	// 参数定义
 	//------------------------------------------------------------------------
-	parameter DATA_WIDTH  = 8                   ;
-	parameter INT_BITS    = 12                  ;
-	parameter FRAC_BITS   = 8                   ;
-	parameter WEIGHT_BITS = 8                   ;
-	parameter COORD_BITS  = INT_BITS + FRAC_BITS;
-	parameter CLK_PERIOD  = 10                  ;// 100MHz
+	parameter DATA_WIDTH  		= 8                   ;
+	parameter INT_BITS    		= 12                  ;
+	parameter FRAC_BITS   		= 8                   ;
+	parameter WEIGHT_BITS 		= 8                   ;
+	parameter COORD_BITS  		= INT_BITS + FRAC_BITS;
+	parameter CLK_PERIOD_IN 	= 16                  ;// 62.5MHz
+	parameter CLK_PERIOD_OUT 	= 4                   ;// 250MHz
 
 	// 测试图像参数
 	parameter SRC_WIDTH    = 100 ;
@@ -46,7 +47,7 @@ module ut_bilinear_scaler;
 	//------------------------------------------------------------------------
 	// 信号声明
 	//------------------------------------------------------------------------
-	reg                                clk             ;
+	reg                                clk, clk_out    ;
 	reg                                rst_n           ;
 
 	// 配置接口
@@ -137,7 +138,7 @@ module ut_bilinear_scaler;
 		//------------------------------------------------------------------------
 		// 输出时钟域 (显示接口)
 		//------------------------------------------------------------------------
-		.clk_out       	(clk				),//I1,输出时钟
+		.clk_out       	(clk_out			),//I1,输出时钟
 		.rst_n_out     	(rst_n				),//I1,输出复位
 		//------------------------------------------------------------------------
 		// 输出视频流 (AXI-S风格, clk_out域)
@@ -154,10 +155,17 @@ module ut_bilinear_scaler;
 	//------------------------------------------------------------------------
 	initial begin
 		clk = 0;
-		// forever #(CLK_PERIOD/2) clk = ~clk;
 		forever begin
-			#(CLK_PERIOD/2)               clk = 1'b1;
-			#(CLK_PERIOD - CLK_PERIOD/2)  clk = 1'b0;
+			#(CLK_PERIOD_IN/2)               	clk = 1'b1;
+			#(CLK_PERIOD_IN - CLK_PERIOD_IN/2)  clk = 1'b0;
+		end
+	end
+
+	initial begin
+		clk_out = 0;
+		forever begin
+			#(CLK_PERIOD_OUT/2)               		clk_out = 1'b1;
+			#(CLK_PERIOD_OUT - CLK_PERIOD_OUT/2)  	clk_out = 1'b0;
 		end
 	end
 
@@ -191,9 +199,9 @@ module ut_bilinear_scaler;
 		cfg_src_height  = SRC_HEIGHT  ;
 
 		// 复位
-		#(CLK_PERIOD * 5);
+		#(CLK_PERIOD_IN * 5);
 		rst_n = 1'b1;
-		#(CLK_PERIOD * 2);
+		#(CLK_PERIOD_IN * 2);
 
 		$display("============================================");
 		$display("双线性插值缩放器测试开始");
