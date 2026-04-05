@@ -18,8 +18,8 @@ signalSpacing 3
 windowTimeUnit 10ns
 
 ; waveform viewport range
-zoom 25767.513991 29887.178189 10n
-cursor 27571.500000
+zoom 0.000000 189554.600000 10n
+cursor 11.600000
 marker 6.500000
 
 ; user define markers
@@ -27,7 +27,7 @@ marker 6.500000
 ; visible top row signal index
 top 0
 ; marker line index
-markerPos 33
+markerPos 25
 
 ; event list
 ; addEvent event_name event_expression
@@ -68,20 +68,11 @@ addSignal -h 15 -holdScope o_valid
 addSignal -h 15 -UNSIGNED -HEX -holdScope o_data[7:0]
 addSignal -h 15 -holdScope o_last
 addGroup "G3"
-addSignal -h 15 -UNSIGNED -UDEC /ut_bilinear_scaler/dut/r_dst_width[15:0]
+addSignal -h 15 -UNSIGNED -HEX /ut_bilinear_scaler/dut/dst_y_cnt[15:0]
 addSignal -h 15 -UNSIGNED -UDEC -holdScope r_dst_height[15:0]
 addSignal -h 15 -UNSIGNED -HEX -holdScope dst_x_cnt[15:0]
-addSignal -h 15 -UNSIGNED -UDEC -holdScope r_src_width[15:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope h_pix_result[7:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope h_pix_0[7:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope h_pix_1[7:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope w_x0[7:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope w_x1[7:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope v_pix_result[7:0]
-addSignal -h 15 -UNSIGNED -UDEC -holdScope v_pix_0[7:0]
-addSignal -h 15 -UNSIGNED -UDEC -holdScope v_pix_1[7:0]
-addSignal -h 15 -UNSIGNED -UDEC -holdScope w_y0[7:0]
-addSignal -h 15 -UNSIGNED -UDEC -holdScope w_y1[7:0]
+addSignal -h 15 -holdScope output_active
+addSignal -h 15 -holdScope h_filter_valid_out
 addGroup "G4"
 
 ; grid status
@@ -101,6 +92,7 @@ getSignalForm close
 "/std/semaphore"
 "/ut_bilinear_scaler"
 "/ut_bilinear_scaler/dut"
+"/ut_bilinear_scaler/dut/u_coord_y"
 "/ut_bilinear_scaler/send_frame_block"
 
 SCOPE_LIST_BEGIN
@@ -109,6 +101,7 @@ SCOPE_LIST_BEGIN
 "/ut_bilinear_scaler"
 "/std/semaphore"
 "/ut_bilinear_scaler/send_frame_block"
+"/ut_bilinear_scaler/dut/u_coord_y"
 "/ut_bilinear_scaler/dut"
 SCOPE_LIST_END
 

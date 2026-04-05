@@ -164,14 +164,17 @@ module bilinear_scaler_vh #(
 	wire                  l1_rd_data_0_valid ;// buffer0读有效
 	wire                  l1_rd_data_1_valid ;// buffer1读有效
 	wire                  l1_rd_data_2_valid ;// buffer2读有效
-	reg  [DATA_WIDTH-1:0] l1_rd_data_y0      ;// Y0行读数据（选择后）
-	reg  [DATA_WIDTH-1:0] l1_rd_data_y1      ;// Y1行读数据（选择后）
+	wire [DATA_WIDTH-1:0] l1_rd_data_y0      ;// Y0行读数据（选择后）
+	wire [DATA_WIDTH-1:0] l1_rd_data_y1      ;// Y1行读数据（选择后）
 	reg                   l1_rd_data_valid   ;// 读数据有效
 
-	// L1 buffer datacnt（读时钟域可见）
-	wire [ADDR_WIDTH:0]   l1_buf0_datacnt    ;// buffer0数据计数
-	wire [ADDR_WIDTH:0]   l1_buf1_datacnt    ;// buffer1数据计数
-	wire [ADDR_WIDTH:0]   l1_buf2_datacnt    ;// buffer2数据计数
+	// line_id 同步到 clk_out（简化：直接打2拍，适用于变化频率低且可容忍短暂错误）
+	reg [15:0] l1_buf0_line_id_d0;// line_id 第1拍
+	reg [15:0] l1_buf1_line_id_d0;
+	reg [15:0] l1_buf2_line_id_d0;
+	reg [15:0] l1_buf0_line_id_d1;// line_id 第2拍（clk_out域使用）
+	reg [15:0] l1_buf1_line_id_d1;
+	reg [15:0] l1_buf2_line_id_d1;
 
 	// v_min_src_row 从clk_out同步到clk_in（跨时钟域，DMUX方案）
 	reg  [15:0]           v_min_src_row        ;// clk_out域生成
@@ -215,7 +218,7 @@ module bilinear_scaler_vh #(
 		.rd_addr       (l1_rd_addr            ),//Ix,
 		.rd_data       (l1_rd_data_0          ),//Ox,
 		.rd_data_valid (l1_rd_data_0_valid    ),//O1,
-		.datacnt       (l1_buf0_datacnt       ) //Ox+1,
+		.datacnt       (                      ) //Ox+1, 未使用
 	);
 
 	// L1 wrapper实例1
@@ -234,7 +237,7 @@ module bilinear_scaler_vh #(
 		.rd_addr       (l1_rd_addr            ),//Ix,
 		.rd_data       (l1_rd_data_1          ),//Ox,
 		.rd_data_valid (l1_rd_data_1_valid    ),//O1,
-		.datacnt       (l1_buf1_datacnt       ) //Ox+1,
+		.datacnt       (                      ) //Ox+1, 未使用
 	);
 
 	// L1 wrapper实例2
@@ -253,7 +256,7 @@ module bilinear_scaler_vh #(
 		.rd_addr       (l1_rd_addr            ),//Ix,
 		.rd_data       (l1_rd_data_2          ),//Ox,
 		.rd_data_valid (l1_rd_data_2_valid    ),//O1,
-		.datacnt       (l1_buf2_datacnt       ) //Ox+1,
+		.datacnt       (                      ) //Ox+1, 未使用
 	);
 
 	//------------------------------------------------------------------------
@@ -363,6 +366,28 @@ module bilinear_scaler_vh #(
 	end
 
 	//------------------------------------------------------------------------
+	// line_id 同步到 clk_out（多bit打2拍，简化方案）
+	//------------------------------------------------------------------------
+	always @(posedge clk_out or negedge rst_n_out) begin
+		if (rst_n_out == 1'b0) begin
+			l1_buf0_line_id_d0 <= 16'd0;
+			l1_buf1_line_id_d0 <= 16'd0;
+			l1_buf2_line_id_d0 <= 16'd0;
+			l1_buf0_line_id_d1 <= 16'd0;
+			l1_buf1_line_id_d1 <= 16'd0;
+			l1_buf2_line_id_d1 <= 16'd0;
+		end
+		else begin
+			l1_buf0_line_id_d0 <= #U_DLY l1_buf0_line_id;
+			l1_buf1_line_id_d0 <= #U_DLY l1_buf1_line_id;
+			l1_buf2_line_id_d0 <= #U_DLY l1_buf2_line_id;
+			l1_buf0_line_id_d1 <= #U_DLY l1_buf0_line_id_d0;
+			l1_buf1_line_id_d1 <= #U_DLY l1_buf1_line_id_d0;
+			l1_buf2_line_id_d1 <= #U_DLY l1_buf2_line_id_d0;
+		end
+	end
+
+	//------------------------------------------------------------------------
 	//========================================================================
 	// 第3部分：目标坐标生成（clk_out域）
 	//========================================================================
@@ -415,18 +440,38 @@ module bilinear_scaler_vh #(
 	wire [15:0] need_src_y0 = coord_y_int;
 	wire [15:0] need_src_y1 = coord_y_int + 1'b1;
 
-	// l1_buf_busy_num 同步到 clk_out（简化：用datacnt判断）
-	wire l1_has_2rows = (l1_buf0_datacnt > 0) &&
-	                    ((l1_buf1_datacnt > 0) || (l1_buf2_datacnt > 0));
+	//------------------------------------------------------------------------
+	//========================================================================
+	// 第4部分：V-filter（双线性垂直插值，2-tap）
+	//========================================================================
+	// 读取L1的两行（y0和y1），根据coord_y_frac做插值
+
+	// L1 buffer 匹配（组合逻辑）
+	// 使用同步后的 line_id_d1（clk_out域）
+	wire buf0_has_y0 = (l1_buf0_line_id_d1 == need_src_y0);
+	wire buf1_has_y0 = (l1_buf1_line_id_d1 == need_src_y0);
+	wire buf2_has_y0 = (l1_buf2_line_id_d1 == need_src_y0);
+	wire buf0_has_y1 = (l1_buf0_line_id_d1 == need_src_y1);
+	wire buf1_has_y1 = (l1_buf1_line_id_d1 == need_src_y1);
+	wire buf2_has_y1 = (l1_buf2_line_id_d1 == need_src_y1);
+
+	// V-filter启动条件：需要的源行是否就绪
+	// 双线性需要2行：need_src_y0 和 need_src_y1
+	// 边界情况：下边界时y1=y0（复制边界）
+	wire need_y0_ready = buf0_has_y0 || buf1_has_y0 || buf2_has_y0;
+	wire need_y1_ready = (need_src_y1 >= r_src_height) ? need_y0_ready :  // 下边界复制
+	                     (buf0_has_y1 || buf1_has_y1 || buf2_has_y1);
+	wire v_filter_ready = need_y0_ready && need_y1_ready;
 
 	// 输出控制 - output_active（启动/停止控制）
+	// 注意：依赖v_filter_ready信号（已在上方定义）
 	always @(posedge clk_out or negedge rst_n_out) begin
 		if (rst_n_out == 1'b0)
 			output_active <= 1'b0;
 		else if (frame_start_pulse == 1'b1)
 			output_active <= 1'b0;
-		else if (output_active == 1'b0 && l1_has_2rows)
-			// 双线性：L1有2行即可开始输出
+		else if (output_active == 1'b0 && v_filter_ready)
+			// V-filter所需行就绪即可开始输出
 			output_active <= #U_DLY 1'b1;
 		else if (output_active == 1'b1 && o_valid == 1'b1 && o_ready == 1'b1 &&
 		         dst_x_cnt >= r_dst_width - 1 && dst_y_cnt >= r_dst_height - 1)
@@ -463,20 +508,6 @@ module bilinear_scaler_vh #(
 			end
 	end
 
-	//------------------------------------------------------------------------
-	//========================================================================
-	// 第4部分：V-filter（双线性垂直插值，2-tap）
-	//========================================================================
-	// 读取L1的两行（y0和y1），根据coord_y_frac做插值
-
-	// L1 buffer 匹配（组合逻辑）
-	wire buf0_has_y0 = (l1_buf0_line_id == need_src_y0) && (l1_buf_busy_num > 0);
-	wire buf1_has_y0 = (l1_buf1_line_id == need_src_y0) && (l1_buf_busy_num > 1);
-	wire buf2_has_y0 = (l1_buf2_line_id == need_src_y0) && (l1_buf_busy_num > 2);
-	wire buf0_has_y1 = (l1_buf0_line_id == need_src_y1) && (l1_buf_busy_num > 0);
-	wire buf1_has_y1 = (l1_buf1_line_id == need_src_y1) && (l1_buf_busy_num > 1);
-	wire buf2_has_y1 = (l1_buf2_line_id == need_src_y1) && (l1_buf_busy_num > 2);
-
 	// Buffer选择（优先级编码）
 	always @(*) begin
 		if      (buf0_has_y0) l1_rd_buf_sel_y0 = 2'd0;
@@ -492,24 +523,33 @@ module bilinear_scaler_vh #(
 		else                  l1_rd_buf_sel_y1 = 2'd0;
 	end
 
-	// L1读数据选择
+	// L1读数据选择（带边界处理）
+	// 当 need_src_y1 >= r_src_height 时，y1=y0（下边界复制）
+	reg  [DATA_WIDTH-1:0] l1_rd_data_y0_raw;
+	reg  [DATA_WIDTH-1:0] l1_rd_data_y1_raw;
+	
 	always @(*) begin
 		case (l1_rd_buf_sel_y0)
-			2'd0: l1_rd_data_y0 = l1_rd_data_0;
-			2'd1: l1_rd_data_y0 = l1_rd_data_1;
-			2'd2: l1_rd_data_y0 = l1_rd_data_2;
-			default: l1_rd_data_y0 = l1_rd_data_0;
+			2'd0: l1_rd_data_y0_raw = l1_rd_data_0;
+			2'd1: l1_rd_data_y0_raw = l1_rd_data_1;
+			2'd2: l1_rd_data_y0_raw = l1_rd_data_2;
+			default: l1_rd_data_y0_raw = l1_rd_data_0;
 		endcase
 	end
 
 	always @(*) begin
 		case (l1_rd_buf_sel_y1)
-			2'd0: l1_rd_data_y1 = l1_rd_data_0;
-			2'd1: l1_rd_data_y1 = l1_rd_data_1;
-			2'd2: l1_rd_data_y1 = l1_rd_data_2;
-			default: l1_rd_data_y1 = l1_rd_data_1;
+			2'd0: l1_rd_data_y1_raw = l1_rd_data_0;
+			2'd1: l1_rd_data_y1_raw = l1_rd_data_1;
+			2'd2: l1_rd_data_y1_raw = l1_rd_data_2;
+			default: l1_rd_data_y1_raw = l1_rd_data_1;
 		endcase
 	end
+	
+	// 边界处理：上边界(need_src_y0<0)和下边界(need_src_y1>=r_src_height)
+	// 由于 coord_y_int 已经 clamped，只需要处理下边界
+	assign l1_rd_data_y0 = l1_rd_data_y0_raw;
+	assign l1_rd_data_y1 = (need_src_y1 >= r_src_height) ? l1_rd_data_y0_raw : l1_rd_data_y1_raw;
 
 	// L1读使能和地址
 	assign l1_rd_addr = dst_x_cnt;
