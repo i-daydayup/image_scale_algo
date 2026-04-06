@@ -18,8 +18,8 @@ signalSpacing 3
 windowTimeUnit 10ns
 
 ; waveform viewport range
-zoom 0.000000 189554.600000 10n
-cursor 11.600000
+zoom 0.000000 4660.292447 10n
+cursor 10072.300000
 marker 6.500000
 
 ; user define markers
@@ -27,7 +27,7 @@ marker 6.500000
 ; visible top row signal index
 top 0
 ; marker line index
-markerPos 25
+markerPos 15
 
 ; event list
 ; addEvent event_name event_expression
@@ -61,18 +61,28 @@ addSignal -h 15 -holdScope i_frame_start
 addSignal -h 15 -holdScope i_last
 addSignal -c ID_PURPLE5 -ls solid -lw 1 -h 15 -holdScope i_valid
 addSignal -h 15 -UNSIGNED -UDEC /ut_bilinear_scaler/frame_cnt[31:0]
+addSignal -h 15 -holdScope display_vs
+addSignal -h 15 -holdScope display_de
 addGroup "duv out"
 addSignal -h 15 /ut_bilinear_scaler/dut/o_ready
 addSignal -h 15 -holdScope o_frame_start
 addSignal -h 15 -holdScope o_valid
 addSignal -h 15 -UNSIGNED -HEX -holdScope o_data[7:0]
 addSignal -h 15 -holdScope o_last
-addGroup "G3"
-addSignal -h 15 -UNSIGNED -HEX /ut_bilinear_scaler/dut/dst_y_cnt[15:0]
-addSignal -h 15 -UNSIGNED -UDEC -holdScope r_dst_height[15:0]
-addSignal -h 15 -UNSIGNED -HEX -holdScope dst_x_cnt[15:0]
-addSignal -h 15 -holdScope output_active
-addSignal -h 15 -holdScope h_filter_valid_out
+addGroup "G5"
+addSignal -h 15 /ut_bilinear_scaler/dut/l1_buf0_wr_en
+addSignal -h 15 -holdScope l1_buf1_wr_en
+addSignal -h 15 -holdScope l1_buf2_wr_en
+addSignal -h 15 -UNSIGNED -HEX -holdScope l1_wr_buf_sel[1:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope l1_buf_busy_num[1:0]
+addSignal -h 15 -holdScope buf_can_release
+addSignal -h 15 -UNSIGNED -UDEC -holdScope in_row_idx[15:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope l1_buf0_line_id[15:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope l1_buf1_line_id[15:0]
+addSignal -h 15 -UNSIGNED -HEX -holdScope l1_buf2_line_id[15:0]
+addSignal -h 15 -UNSIGNED -UDEC -holdScope dst_y_cnt[15:0]
+addSignal -h 15 -UNSIGNED -UDEC -holdScope l2_rd_ptr[9:0]
+addSignal -h 15 -holdScope o_valid_pre
 addGroup "G4"
 
 ; grid status
@@ -93,16 +103,15 @@ getSignalForm close
 "/ut_bilinear_scaler"
 "/ut_bilinear_scaler/dut"
 "/ut_bilinear_scaler/dut/u_coord_y"
-"/ut_bilinear_scaler/send_frame_block"
 
 SCOPE_LIST_BEGIN
 "/std"
 "/ut_bilinear_scaler/dut/u_interp"
-"/ut_bilinear_scaler"
 "/std/semaphore"
 "/ut_bilinear_scaler/send_frame_block"
 "/ut_bilinear_scaler/dut/u_coord_y"
 "/ut_bilinear_scaler/dut"
+"/ut_bilinear_scaler"
 SCOPE_LIST_END
 
 GETSIGNALFORM_SCOPE_HIERARCHY_END

@@ -154,10 +154,10 @@ module bilinear_scaler_vh #(
 	reg  [15:0]           l1_buf2_line_id    ;// buffer2存储的源行号
 
 	// L1 读控制（clk_out域）
-	reg  [ADDR_WIDTH-1:0] l1_rd_addr         ;// 读地址
+	wire [ADDR_WIDTH-1:0] l1_rd_addr         ;// 读地址
 	reg  [1:0]            l1_rd_buf_sel_y0   ;// Y0行buffer选择
 	reg  [1:0]            l1_rd_buf_sel_y1   ;// Y1行buffer选择
-	reg                   l1_rd_en           ;// 读使能
+	wire                  l1_rd_en           ;// 读使能
 	wire [DATA_WIDTH-1:0] l1_rd_data_0       ;// buffer0读数据
 	wire [DATA_WIDTH-1:0] l1_rd_data_1       ;// buffer1读数据
 	wire [DATA_WIDTH-1:0] l1_rd_data_2       ;// buffer2读数据
@@ -278,15 +278,12 @@ module bilinear_scaler_vh #(
 	// L1 写控制 - 输入行计数器（单独always）
 	//------------------------------------------------------------------------
 	always @(posedge clk_in or negedge rst_n_in) begin
-		if (rst_n_in == 1'b0) begin
+		if (rst_n_in == 1'b0)
 			in_row_idx <= 16'd0;
-		end
-		else if (i_frame_start == 1'b1 && i_valid == 1'b1) begin
+		else if (i_frame_start == 1'b1 && i_valid == 1'b1)
 			in_row_idx <= #U_DLY 16'd0;
-		end
-		else if (i_valid == 1'b1 && i_ready == 1'b1 && i_last == 1'b1) begin
+		else if (i_valid == 1'b1 && i_ready == 1'b1 && i_last == 1'b1)
 			in_row_idx <= #U_DLY in_row_idx + 1'b1;
-		end
 	end
 
 	//------------------------------------------------------------------------
@@ -348,16 +345,16 @@ module bilinear_scaler_vh #(
 	// clk_in域：同步选择信号（单bit用_dy风格）
 	reg		[1:0]	v_min_src_row_sel_dy;
 	always @(posedge clk_in or negedge rst_n_in) begin
-		if (rst_n_in == 1'b0) 
+		if (rst_n_in == 1'b0)
 			v_min_src_row_sel_dy <= 2'd0;
 		else begin
 			// 选择信号2-stage同步（_dy风格）
 			v_min_src_row_sel_dy <= #U_DLY {v_min_src_row_sel_dy[0], v_min_src_row_sel};
 		end
-		
-		if (rst_n_in == 1'b0) 
+
+		if (rst_n_in == 1'b0)
 			v_min_src_row_synced <= 16'd0;
-		else begin			
+		else begin
 			// 边沿检测时采样数据（even/odd直接组合选择，无需打拍）
 			if (v_min_src_row_sel_dy[0] != v_min_src_row_sel_dy[1]) begin
 				v_min_src_row_synced <= #U_DLY (v_min_src_row_sel_dy[0] == 1'b1) ? v_min_src_row_odd : v_min_src_row_even;
@@ -527,7 +524,7 @@ module bilinear_scaler_vh #(
 	// 当 need_src_y1 >= r_src_height 时，y1=y0（下边界复制）
 	reg  [DATA_WIDTH-1:0] l1_rd_data_y0_raw;
 	reg  [DATA_WIDTH-1:0] l1_rd_data_y1_raw;
-	
+
 	always @(*) begin
 		case (l1_rd_buf_sel_y0)
 			2'd0: l1_rd_data_y0_raw = l1_rd_data_0;
@@ -545,7 +542,7 @@ module bilinear_scaler_vh #(
 			default: l1_rd_data_y1_raw = l1_rd_data_1;
 		endcase
 	end
-	
+
 	// 边界处理：上边界(need_src_y0<0)和下边界(need_src_y1>=r_src_height)
 	// 由于 coord_y_int 已经 clamped，只需要处理下边界
 	assign l1_rd_data_y0 = l1_rd_data_y0_raw;
@@ -625,13 +622,15 @@ module bilinear_scaler_vh #(
 	// 注：v_min_src_row 已在第2部分信号声明区域定义
 
 	// v_min_src_row 生成逻辑
+	// v_min_src_row = 当前V-filter窗口需要的最小源行号（即coord_y_int）
+	// 当放大时，coord_y_int增加缓慢；缩小时，coord_y_int快速增加
 	always @(posedge clk_out or negedge rst_n_out) begin
 		if (rst_n_out == 1'b0)
 			v_min_src_row <= 16'd0;
 		else if (frame_start_pulse == 1'b1)
 			v_min_src_row <= #U_DLY 16'd0;
-		else if (dst_y_cnt > 0 && coord_y_int > v_min_src_row)
-			// 当目标行前进，且源整数坐标超过当前v_min_src_row时更新
+		else if (output_active == 1'b1 && coord_y_valid == 1'b1)
+			// 只要坐标有效，就实时跟踪最小源行号
 			v_min_src_row <= #U_DLY coord_y_int;
 	end
 
