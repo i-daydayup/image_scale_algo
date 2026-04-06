@@ -170,12 +170,12 @@ module ut_bilinear_scaler;
 		i_last          = 1'b0;
 		i_frame_start   = 1'b0;
 		o_ready         = 1'b0;
-		
+
 		display_vs      = 1'b0;
 		display_de      = 1'b0;
 		display_x       = 0;
 		display_y       = 0;
-		
+
 		// 配置参数
 		cfg_inv_scale_x = INV_SCALE_X ;
 		cfg_inv_scale_y = INV_SCALE_Y ;
@@ -193,7 +193,7 @@ module ut_bilinear_scaler;
 		$display("双线性插值缩放器 V+H 架构测试开始");
 		$display("源图尺寸: %0dx%0d", SRC_WIDTH, SRC_HEIGHT);
 		$display("目标尺寸: %0dx%0d", DST_WIDTH, DST_HEIGHT);
-		$display("输入时钟: %0.1fMHz, 输出时钟: %0.1fMHz", 
+		$display("输入时钟: %0.1fMHz, 输出时钟: %0.1fMHz",
 		         1000.0/CLK_PERIOD_IN, 1000.0/CLK_PERIOD_OUT);
 		$display("============================================");
 	end
@@ -233,7 +233,7 @@ module ut_bilinear_scaler;
 	localparam H_ACTIVE  = DST_WIDTH;
 	localparam H_FRONT   = 8;    // 行前肩
 	localparam H_TOTAL   = H_SYNC + H_BACK + H_ACTIVE + H_FRONT;
-	
+
 	localparam V_SYNC    = 1;    // 场同步
 	localparam V_BACK    = 4;    // 场后肩 (用于DDR预加载)
 	localparam V_ACTIVE  = DST_HEIGHT;
@@ -243,36 +243,36 @@ module ut_bilinear_scaler;
 	initial begin
 		@(posedge rst_n);  // 等待复位完成
 		repeat(10) @(posedge clk_out);
-		
+
 		forever begin
 			// V_SYNC: 帧开始脉冲
 			display_vs = 1'b1;
 			repeat(H_TOTAL * V_SYNC) @(posedge clk_out);
 			display_vs = 1'b0;
-			
+
 			// V_BACK: 消隐期 (DDR在此期间预加载数据到L1 buffer)
 			repeat(H_TOTAL * V_BACK) @(posedge clk_out);
-			
+
 			// V_ACTIVE: 有效显示期间
 			for (display_y = 0; display_y < DST_HEIGHT; display_y = display_y + 1) begin
 				// H_BACK: 行消隐
 				repeat(H_BACK) @(posedge clk_out);
-				
+
 				// H_ACTIVE: 有效像素，de和o_ready有效
 				for (display_x = 0; display_x < DST_WIDTH; display_x = display_x + 1) begin
 					display_de <= #U_DLY 1'b1;
 					o_ready    <= #U_DLY 1'b1;
 					@(posedge clk_out);
 				end
-				
+
 				// 行结束
 				display_de <= #U_DLY 1'b0;
 				o_ready    <= #U_DLY 1'b0;
-				
+
 				// H_FRONT + H_SYNC
 				repeat(H_FRONT + H_SYNC) @(posedge clk_out);
 			end
-			
+
 			// V_FRONT: 场消隐
 			repeat(H_TOTAL * V_FRONT) @(posedge clk_out);
 		end
@@ -284,36 +284,37 @@ module ut_bilinear_scaler;
 	//------------------------------------------------------------------------
 	integer row, col;
 	integer frame_cnt;
-	
+
 	initial begin
 		frame_cnt = 0;
 		@(posedge rst_n);
-		
+
 		forever begin
 			// 等待i_frame_start (由display_vs同步过来)
 			@(posedge clk_in);
 			while (i_frame_start == 1'b0) @(posedge clk_in);
-			
+
 			$display("[Frame %0d] DDR开始发送数据 @%0t", frame_cnt, $time);
-			
+			repeat(100) @(posedge clk_in); //帧头到来后，从DDR读取数据，之间有延时，设置100个周期。
+
 			// 发送一帧图像数据 (水平渐变)
 			for (row = 0; row < SRC_HEIGHT; row = row + 1) begin
 				for (col = 0; col < SRC_WIDTH; col = col + 1) begin
 					// 等待i_ready (Scaler准备好接收)
-					@(posedge clk_in);
 					while (i_ready == 1'b0) @(posedge clk_in);
-					
+
 					// 发送像素
 					i_valid <= #U_DLY 1'b1;
 					i_data  <= #U_DLY col[7:0];  // 水平渐变
-					i_last  <= #U_DLY (col == SRC_WIDTH - 1);
+					i_last  <= #U_DLY (col == SRC_WIDTH - 1) ? 1'b1 : 1'b0;
+					@(posedge clk_in);
 				end
 			end
-			
+
 			// 帧结束
 			i_valid <= #U_DLY 1'b0;
 			i_last  <= #U_DLY 1'b0;
-			
+
 			$display("[Frame %0d] DDR发送完成 @%0t", frame_cnt, $time);
 			frame_cnt = frame_cnt + 1;
 		end
@@ -324,17 +325,17 @@ module ut_bilinear_scaler;
 	//------------------------------------------------------------------------
 	integer out_file;
 	integer pixel_cnt;
-	
+
 	initial begin
 		out_file = $fopen("output_verilog.hex", "w");
 		pixel_cnt = 0;
 	end
-	
+
 	always @(posedge clk_out) begin
 		if (o_valid == 1'b1 && o_ready == 1'b1) begin
 			$fwrite(out_file, "%02x\n", o_data);
 			pixel_cnt = pixel_cnt + 1;
-			
+
 			if (pixel_cnt % 1000 == 0)
 				$display("输出像素数: %0d / %0d", pixel_cnt, DST_WIDTH * DST_HEIGHT);
 		end
